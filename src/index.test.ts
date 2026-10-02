@@ -41,6 +41,7 @@ test("public feed is empty and does not call Intervals.icu", async () => {
     },
   );
   assert.equal(response.status, 200);
+  assert.equal(response.headers.get("Cache-Control"), "no-store");
   assert.deepEqual(await response.json(), {
     source: "empty",
     updatedAt: null,
@@ -105,7 +106,7 @@ test("a failed refresh keeps the last good cache and marks it stale", async () =
 });
 
 test("an env key fills the feed and is not stored", async () => {
-  const store = env("intervals-key");
+  const store = env("intervals*key");
   const response = await handleRequest(
     new Request("https://activities.sradams.co.uk/feed.json"),
     store,
@@ -120,12 +121,12 @@ test("an env key fills the feed and is not stored", async () => {
   assert.equal(body.source, "intervals");
   assert.equal(body.activities.length, 1);
   const saved = (await store.FEED.get("feed")) ?? "";
-  assert.equal(saved.includes("intervals-key"), false);
+  assert.equal(saved.includes("intervals*key"), false);
   assert.equal(await store.FEED.get("intervals"), null);
 });
 
 test("a refused activity pull stays empty and does not leak the key", async () => {
-  const store = env("intervals-key");
+  const store = env("intervals*key");
   const response = await handleRequest(
     new Request("https://activities.sradams.co.uk/feed.json"),
     store,
@@ -135,7 +136,7 @@ test("a refused activity pull stays empty and does not leak the key", async () =
   assert.equal(body.source, "empty");
   const sync = JSON.parse((await store.FEED.get("sync")) ?? "{}") as { message?: string };
   assert.match(sync.message ?? "", /401/);
-  assert.equal((sync.message ?? "").includes("intervals-key"), false);
+  assert.equal((sync.message ?? "").includes("intervals*key"), false);
 });
 
 test("cors allows the site and ignores other origins", async () => {

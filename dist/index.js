@@ -134,7 +134,10 @@ function cors(request, env) {
 function json(body, extra, status = 200) {
   const headers = extra ?? new Headers();
   headers.set("Content-Type", "application/json; charset=utf-8");
-  if (!headers.has("Cache-Control")) headers.set("Cache-Control", "public, max-age=300");
+  if (!headers.has("Cache-Control")) {
+    const empty = typeof body === "object" && body !== null && body.source === "empty";
+    headers.set("Cache-Control", empty ? "no-store" : "public, max-age=300");
+  }
   return new Response(JSON.stringify(body), { status, headers });
 }
 function text(body, status, extra) {
@@ -154,8 +157,13 @@ async function readFeed(env) {
   }
 }
 function apiKeyFrom(env) {
-  const apiKey = (env.INTERVALS_API_KEY || "").trim();
-  if (!/^[A-Za-z0-9_-]{8,200}$/.test(apiKey)) return null;
+  let apiKey = (env.INTERVALS_API_KEY || "").trim();
+  if (apiKey.startsWith('"') && apiKey.endsWith('"') || apiKey.startsWith("'") && apiKey.endsWith("'")) {
+    apiKey = apiKey.slice(1, -1).trim();
+  }
+  if (/^API_KEY:/i.test(apiKey)) apiKey = apiKey.slice("API_KEY:".length).trim();
+  if (apiKey.length < 8 || apiKey.length > 200) return null;
+  if (/[^\x21-\x7e]/.test(apiKey)) return null;
   return apiKey;
 }
 function basic(apiKey) {
