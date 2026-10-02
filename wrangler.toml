@@ -11,9 +11,11 @@ id = "f0a57d469c054cfcaeb542423ca0ef68"
 [triggers]
 crons = ["*/30 * * * *"]
 
-# Secrets — wrangler secret put, never commit them:
-#   STRAVA_CLIENT_ID
+# Secret — wrangler secret put, never commit it:
 #   STRAVA_CLIENT_SECRET
 # The refresh token is obtained by logging in with Strava. Do not commit it.
+# Client id is public (it is in the Strava authorize URL). Keep it here so the
+# next deploy does not wipe the plain-text binding.
 [vars]
 ALLOWED_ORIGINS = "https://sradams.co.uk,https://www.sradams.co.uk"
+STRAVA_CLIENT_ID = "84264"

@@ -18,10 +18,9 @@ Use one of your existing Strava API apps. Set its Authorization Callback Domain 
 npx wrangler kv namespace create FEED
 ```
 
-Paste the id into `wrangler.toml`, then:
+Paste the KV id into `wrangler.toml`. `STRAVA_CLIENT_ID` is already a plain var there. Then:
 
 ```bash
-npx wrangler secret put STRAVA_CLIENT_ID
 npx wrangler secret put STRAVA_CLIENT_SECRET
 npx wrangler deploy
 ```
