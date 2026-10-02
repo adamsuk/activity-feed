@@ -1,0 +1,19 @@
+name = "sradams-activities"
+main = "src/index.ts"
+compatibility_date = "2026-10-02"
+
+# Create the namespace, then paste its id here:
+#   npx wrangler kv namespace create FEED
+[[kv_namespaces]]
+binding = "FEED"
+id = "00000000000000000000000000000000"
+
+[triggers]
+crons = ["*/30 * * * *"]
+
+# Secrets — wrangler secret put, never commit them:
+#   STRAVA_CLIENT_ID
+#   STRAVA_CLIENT_SECRET
+# The refresh token is obtained by logging in with Strava. Do not commit it.
+[vars]
+ALLOWED_ORIGINS = "https://sradams.co.uk,https://www.sradams.co.uk"
