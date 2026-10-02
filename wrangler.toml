@@ -11,7 +11,8 @@ id = "f0a57d469c054cfcaeb542423ca0ef68"
 [triggers]
 crons = ["*/30 * * * *"]
 
-# The Intervals.icu API key is saved from the Access-protected page.
+# The Intervals.icu API key is a Worker secret named INTERVALS_API_KEY.
+# Set it in the dashboard or with: npx wrangler secret put INTERVALS_API_KEY
 # Do not commit it.
 [vars]
 ALLOWED_ORIGINS = "https://sradams.co.uk,https://www.sradams.co.uk"

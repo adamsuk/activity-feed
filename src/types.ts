@@ -36,4 +36,6 @@ export interface Env {
   FEED: Kv;
   /** Comma-separated. Defaults to the public site. */
   ALLOWED_ORIGINS?: string;
+  /** Intervals.icu personal API key. Set as a Worker secret. Never commit it. */
+  INTERVALS_API_KEY?: string;
 }

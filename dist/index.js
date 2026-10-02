@@ -113,7 +113,6 @@ function toPublicFeed(value) {
 
 // worker/src/index.ts
 var FEED_KEY = "feed";
-var ACCOUNT_KEY = "intervals";
 var SYNC_KEY = "sync";
 var SYNC_BACKOFF_MS = 5 * 60 * 1e3;
 var ATHLETE_URL = "https://intervals.icu/api/v1/athlete";
@@ -154,27 +153,10 @@ async function readFeed(env) {
     return emptyFeed();
   }
 }
-function accountFrom(value) {
-  if (!value || typeof value !== "object") return null;
-  const row = value;
-  const apiKey = typeof row.apiKey === "string" ? row.apiKey : "";
-  const athleteId = typeof row.athleteId === "string" ? row.athleteId : "";
-  if (!/^[A-Za-z0-9_-]{8,128}$/.test(apiKey)) return null;
-  if (!/^i?\d{1,20}$/.test(athleteId)) return null;
-  const athleteName = typeof row.athleteName === "string" ? row.athleteName.slice(0, 80) : void 0;
-  return { apiKey, athleteId, athleteName };
-}
-async function readAccount(env) {
-  const raw = await env.FEED.get(ACCOUNT_KEY);
-  if (!raw) return null;
-  try {
-    return accountFrom(JSON.parse(raw));
-  } catch {
-    return null;
-  }
-}
-async function saveAccount(env, account) {
-  await env.FEED.put(ACCOUNT_KEY, JSON.stringify(account));
+function apiKeyFrom(env) {
+  const apiKey = (env.INTERVALS_API_KEY || "").trim();
+  if (!/^[A-Za-z0-9_-]{8,200}$/.test(apiKey)) return null;
+  return apiKey;
 }
 function basic(apiKey) {
   return `Basic ${btoa(`API_KEY:${apiKey}`)}`;
@@ -217,10 +199,21 @@ async function recentSyncFailure(env) {
     return false;
   }
 }
+async function resolveAccount(env, fetchImpl) {
+  const apiKey = apiKeyFrom(env);
+  if (!apiKey) throw new Error("Intervals.icu API key is not set");
+  const res = await fetchImpl(ATHLETE_URL, { headers: { Authorization: basic(apiKey) } });
+  if (!res.ok) {
+    const detail = await failureDetail(res);
+    throw new Error(detail ? `athlete failed (${res.status}) ${detail}` : `athlete failed (${res.status})`);
+  }
+  const athlete = athleteFrom(await res.json());
+  if (!athlete) throw new Error("Intervals.icu did not return an athlete id");
+  return { apiKey, athleteId: athlete.id, athleteName: athlete.name };
+}
 async function refreshFeed(env, fetchImpl = fetch, known) {
   try {
-    const account = known?.apiKey ? known : await readAccount(env);
-    if (!account) throw new Error("Intervals.icu is not connected");
+    const account = known?.apiKey ? known : await resolveAccount(env, fetchImpl);
     const url = `https://intervals.icu/api/v1/athlete/${account.athleteId}/activities?oldest=${day(-120)}&newest=${day(1)}`;
     const res = await fetchImpl(url, { headers: { Authorization: basic(account.apiKey) } });
     if (!res.ok) {
@@ -235,6 +228,8 @@ async function refreshFeed(env, fetchImpl = fetch, known) {
     };
     await env.FEED.put(FEED_KEY, JSON.stringify(feed));
     await env.FEED.delete(SYNC_KEY);
+    await env.FEED.delete("token");
+    await env.FEED.delete("intervals");
     return feed;
   } catch (error) {
     await noteSyncFailure(env, error);
@@ -257,106 +252,12 @@ async function serveFeed(env, fetchImpl) {
     }
   }
   if (await recentSyncFailure(env)) return emptyFeed();
-  const account = await readAccount(env);
-  if (!account) return emptyFeed();
+  if (!apiKeyFrom(env)) return emptyFeed();
   try {
-    return await refreshFeed(env, fetchImpl, account);
+    return await refreshFeed(env, fetchImpl);
   } catch {
     return emptyFeed();
   }
-}
-function escapeHtml(value) {
-  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
-function page(body) {
-  const html = `<!doctype html>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Activity feed</title>
-<style>
-  body { font: 16px/1.5 Georgia, serif; margin: 0; background: #f6f1e7; color: #1c1915; }
-  main { max-width: 28rem; margin: 0 auto; padding: 3rem 1.25rem; }
-  a, button, input { font: inherit; }
-  button, .login { display: inline-flex; align-items: center; min-height: 2.75rem; margin-top: 1rem; padding: 0 1rem; border-radius: 999px; background: #1c1915; color: #f6f1e7; text-decoration: none; border: 0; }
-  input { display: block; width: 100%; box-sizing: border-box; margin-top: 0.35rem; padding: 0.6rem 0.75rem; border: 1px solid #d9d0c1; border-radius: 0.75rem; background: #fffdf8; }
-  label { display: block; margin-top: 1rem; }
-  p.note { color: #5c564c; }
-</style>
-<main>
-${body}
-</main>`;
-  return new Response(html, {
-    headers: {
-      "Content-Type": "text/html; charset=utf-8",
-      "Cache-Control": "no-store",
-      "X-Robots-Tag": "noindex"
-    }
-  });
-}
-function keyForm() {
-  return `<form method="post" action="/connect">
-<label>Intervals.icu API key
-<input name="apiKey" type="password" autocomplete="off" required>
-</label>
-<button type="submit">Save key</button>
-</form>
-<p class="note">In Intervals.icu: Settings, Developer, create a key. Garmin should be the connected source, not Strava. The key stays on this worker.</p>`;
-}
-async function syncHint(env) {
-  const raw = await env.FEED.get(SYNC_KEY);
-  if (!raw) return "";
-  try {
-    const parsed = JSON.parse(raw);
-    return typeof parsed.message === "string" && parsed.message ? "The activity pull failed. It will retry shortly." : "";
-  } catch {
-    return "";
-  }
-}
-async function statusPage(request, env) {
-  const error = new URL(request.url).searchParams.get("error");
-  const replace = new URL(request.url).searchParams.get("replace");
-  const account = await readAccount(env);
-  const feed = await readFeed(env);
-  const hint = await syncHint(env);
-  const problem = error === "key" ? "Intervals.icu did not accept that key." : error === "refresh" ? "The cache refresh failed. It will retry shortly." : hint;
-  if (!account || replace) {
-    return page(`<h1>${account ? "Replace key" : "Connect Intervals.icu"}</h1>
-<p class="note">This page is for you. The homepage only reads the public feed.</p>
-${problem ? `<p>${escapeHtml(problem)}</p>` : ""}
-${keyForm()}`);
-  }
-  const who = account.athleteName ? escapeHtml(account.athleteName) : "your account";
-  const when = feed.updatedAt ? escapeHtml(feed.updatedAt) : "not yet";
-  return page(`<h1>Connected</h1>
-<p>Signed in as ${who}. ${feed.activities.length} activities cached${feed.stale ? ", last refresh failed" : ""}. Updated ${when}.</p>
-${problem ? `<p>${escapeHtml(problem)}</p>` : ""}
-<form method="post" action="/refresh"><button type="submit">Refresh now</button></form>
-<p><a href="/?replace=1">Replace key</a></p>`);
-}
-async function connect(request, env, fetchImpl) {
-  const form = await request.formData();
-  const apiKey = String(form.get("apiKey") ?? "").trim();
-  const home = new URL("/", request.url);
-  if (!/^[A-Za-z0-9_-]{8,128}$/.test(apiKey)) {
-    home.searchParams.set("error", "key");
-    return Response.redirect(home, 303);
-  }
-  const res = await fetchImpl(ATHLETE_URL, { headers: { Authorization: basic(apiKey) } });
-  const athlete = res.ok ? athleteFrom(await res.json()) : null;
-  if (!athlete) {
-    home.searchParams.set("error", "key");
-    return Response.redirect(home, 303);
-  }
-  const account = { apiKey, athleteId: athlete.id, athleteName: athlete.name };
-  await saveAccount(env, account);
-  await env.FEED.delete("token");
-  try {
-    await refreshFeed(env, fetchImpl, account);
-  } catch {
-    home.searchParams.set("error", "refresh");
-  }
-  home.searchParams.set("connected", "1");
-  return Response.redirect(home, 303);
 }
 async function handleRequest(request, env, fetchImpl = fetch) {
   const url = new URL(request.url);
@@ -367,17 +268,8 @@ async function handleRequest(request, env, fetchImpl = fetch) {
   if (path === "/feed.json" && request.method === "GET") {
     return json(await serveFeed(env, fetchImpl), cors(request, env));
   }
-  if (path === "/" && request.method === "GET") return statusPage(request, env);
-  if (path === "/connect" && request.method === "POST") return connect(request, env, fetchImpl);
-  if (path === "/refresh" && request.method === "POST") {
-    try {
-      await refreshFeed(env, fetchImpl);
-      return Response.redirect(new URL("/", request.url), 303);
-    } catch {
-      const home = new URL("/", request.url);
-      home.searchParams.set("error", "refresh");
-      return Response.redirect(home, 303);
-    }
+  if (path === "/" && request.method === "GET") {
+    return Response.redirect(new URL("/feed.json", request.url), 302);
   }
   return text("Not found", 404);
 }

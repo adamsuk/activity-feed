@@ -1,1 +1,2 @@
-# The API key is entered on the worker page. Nothing to put here.
+# Copy to .dev.vars for `wrangler dev`. Do not commit .dev.vars.
+INTERVALS_API_KEY=

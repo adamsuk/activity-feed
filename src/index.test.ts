@@ -16,16 +16,15 @@ const rawActivity = {
   start_latlng: [52.83, -1.18],
 };
 
-function env(): Env {
+function env(apiKey?: string): Env {
   return {
     FEED: new MemoryKv(),
     ALLOWED_ORIGINS: "https://sradams.co.uk",
+    INTERVALS_API_KEY: apiKey,
   };
 }
 
-function accountJson() {
-  return JSON.stringify({ apiKey: "intervals-key", athleteId: "i2049151", athleteName: "Scott Adams" });
-}
+const known = { apiKey: "intervals-key", athleteId: "i2049151", athleteName: "Scott Adams" };
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status });
@@ -53,7 +52,6 @@ test("public feed is empty and does not call Intervals.icu", async () => {
 
 test("sanitize keeps a homepage row and drops gps and heart rate", async () => {
   const store = env();
-  await store.FEED.put("intervals", accountJson());
   const feed = await refreshFeed(store, async (input) => {
     const url = String(input);
     if (url.includes("/athlete/i2049151/activities")) {
@@ -64,7 +62,7 @@ test("sanitize keeps a homepage row and drops gps and heart rate", async () => {
       ]);
     }
     throw new Error(`unexpected ${url}`);
-  });
+  }, known);
 
   assert.equal(feed.activities.length, 2);
   assert.equal(feed.activities[0]?.sport, "Ride");
@@ -80,7 +78,6 @@ test("sanitize keeps a homepage row and drops gps and heart rate", async () => {
 
 test("a failed refresh keeps the last good cache and marks it stale", async () => {
   const store = env();
-  await store.FEED.put("intervals", accountJson());
   await store.FEED.put(
     "feed",
     JSON.stringify({
@@ -102,47 +99,19 @@ test("a failed refresh keeps the last good cache and marks it stale", async () =
       ],
     }),
   );
-  const feed = await refreshFeed(store, async () => jsonResponse({ message: "no" }, 500));
+  const feed = await refreshFeed(store, async () => jsonResponse({ message: "no" }, 500), known);
   assert.equal(feed.stale, true);
   assert.equal(feed.activities[0]?.name, "Kept");
 });
 
-test("saving a key stores the athlete and does not echo the key", async () => {
-  const store = env();
-  const response = await handleRequest(
-    new Request("https://activities.sradams.co.uk/connect", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: "apiKey=intervals-key",
-    }),
-    store,
-    async (input) => {
-      const url = String(input);
-      if (url.endsWith("/athlete")) {
-        return jsonResponse({ id: "i2049151", name: "Scott Adams" });
-      }
-      if (url.includes("/activities")) return jsonResponse([rawActivity]);
-      throw new Error(`unexpected ${url}`);
-    },
-  );
-  assert.equal(response.status, 303);
-  assert.equal(response.headers.get("Location"), "https://activities.sradams.co.uk/?connected=1");
-  const page = await handleRequest(new Request("https://activities.sradams.co.uk/"), store);
-  const html = await page.text();
-  assert.equal(html.includes("intervals-key"), false);
-  assert.equal(html.includes("Scott Adams"), true);
-  const stored = JSON.parse((await store.FEED.get("intervals")) ?? "{}") as { apiKey?: string };
-  assert.equal(stored.apiKey, "intervals-key");
-});
-
-test("public feed fills from a stored key when the cache is empty", async () => {
-  const store = env();
-  await store.FEED.put("intervals", accountJson());
+test("an env key fills the feed and is not stored", async () => {
+  const store = env("intervals-key");
   const response = await handleRequest(
     new Request("https://activities.sradams.co.uk/feed.json"),
     store,
     async (input) => {
       const url = String(input);
+      if (url.endsWith("/athlete")) return jsonResponse({ id: "i2049151", name: "Scott Adams" });
       if (url.includes("/activities")) return jsonResponse([rawActivity]);
       throw new Error(`unexpected ${url}`);
     },
@@ -150,11 +119,13 @@ test("public feed fills from a stored key when the cache is empty", async () => 
   const body = (await response.json()) as { source: string; activities: unknown[] };
   assert.equal(body.source, "intervals");
   assert.equal(body.activities.length, 1);
+  const saved = (await store.FEED.get("feed")) ?? "";
+  assert.equal(saved.includes("intervals-key"), false);
+  assert.equal(await store.FEED.get("intervals"), null);
 });
 
 test("a refused activity pull stays empty and does not leak the key", async () => {
-  const store = env();
-  await store.FEED.put("intervals", accountJson());
+  const store = env("intervals-key");
   const response = await handleRequest(
     new Request("https://activities.sradams.co.uk/feed.json"),
     store,
