@@ -4,7 +4,6 @@ import type { Env, Feed, IntervalsAccount } from "./types.ts";
 const FEED_KEY = "feed";
 const SYNC_KEY = "sync";
 const SYNC_BACKOFF_MS = 5 * 60 * 1000;
-const ATHLETE_URL = "https://intervals.icu/api/v1/athlete";
 const DEFAULT_ORIGINS = "https://sradams.co.uk,https://www.sradams.co.uk";
 
 type FetchImpl = typeof fetch;
@@ -78,18 +77,6 @@ function day(offset: number): string {
   return new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
 }
 
-function athleteFrom(body: unknown): { id: string; name?: string } | null {
-  if (!body || typeof body !== "object") return null;
-  const row = body as Record<string, unknown>;
-  const id = typeof row.id === "number" ? String(row.id) : typeof row.id === "string" ? row.id : "";
-  if (!/^i?\d{1,20}$/.test(id)) return null;
-  const named = typeof row.name === "string" ? row.name.trim() : "";
-  const first = typeof row.firstname === "string" ? row.firstname.trim() : "";
-  const last = typeof row.lastname === "string" ? row.lastname.trim() : "";
-  const name = (named || [first, last].filter(Boolean).join(" ")).slice(0, 80);
-  return { id, name: name || undefined };
-}
-
 async function failureDetail(res: Response): Promise<string> {
   try {
     const body = (await res.json()) as Record<string, unknown>;
@@ -117,17 +104,10 @@ async function recentSyncFailure(env: Env): Promise<boolean> {
   }
 }
 
-async function resolveAccount(env: Env, fetchImpl: FetchImpl): Promise<IntervalsAccount> {
+async function resolveAccount(env: Env): Promise<IntervalsAccount> {
   const apiKey = apiKeyFrom(env);
   if (!apiKey) throw new Error("Intervals.icu API key is not set");
-  const res = await fetchImpl(ATHLETE_URL, { headers: { Authorization: basic(apiKey) } });
-  if (!res.ok) {
-    const detail = await failureDetail(res);
-    throw new Error(detail ? `athlete failed (${res.status}) ${detail}` : `athlete failed (${res.status})`);
-  }
-  const athlete = athleteFrom(await res.json());
-  if (!athlete) throw new Error("Intervals.icu did not return an athlete id");
-  return { apiKey, athleteId: athlete.id, athleteName: athlete.name };
+  return { apiKey, athleteId: "0" };
 }
 
 export async function refreshFeed(
@@ -136,7 +116,7 @@ export async function refreshFeed(
   known?: IntervalsAccount | null,
 ): Promise<Feed> {
   try {
-    const account = known?.apiKey ? known : await resolveAccount(env, fetchImpl);
+    const account = known?.apiKey ? known : await resolveAccount(env);
     const url = `https://intervals.icu/api/v1/athlete/${account.athleteId}/activities?oldest=${day(-120)}&newest=${day(1)}`;
     const res = await fetchImpl(url, { headers: { Authorization: basic(account.apiKey) } });
     if (!res.ok) {
