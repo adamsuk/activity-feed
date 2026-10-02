@@ -1,12 +1,11 @@
 import { emptyFeed, sanitizeActivities, toPublicFeed } from "./strava.ts";
-import type { Env, Feed, TokenRecord } from "./types.ts";
+import type { Env, Feed, IntervalsAccount } from "./types.ts";
 
 const FEED_KEY = "feed";
-const TOKEN_KEY = "token";
-const TOKEN_URL = "https://www.strava.com/oauth/token";
-// www.strava.com/api/v3 remains valid until the January 2027 cutover.
-const ACTIVITIES_URL = "https://www.strava.com/api/v3/athlete/activities?per_page=30";
-
+const ACCOUNT_KEY = "intervals";
+const SYNC_KEY = "sync";
+const SYNC_BACKOFF_MS = 5 * 60 * 1000;
+const ATHLETE_URL = "https://intervals.icu/api/v1/athlete";
 const DEFAULT_ORIGINS = "https://sradams.co.uk,https://www.sradams.co.uk";
 
 type FetchImpl = typeof fetch;
@@ -45,15 +44,6 @@ function text(body: string, status: number, extra?: Headers): Response {
   return new Response(body, { status, headers });
 }
 
-function readCookie(request: Request, name: string): string {
-  const raw = request.headers.get("Cookie") ?? "";
-  for (const part of raw.split(";")) {
-    const [key, ...rest] = part.trim().split("=");
-    if (key === name) return decodeURIComponent(rest.join("="));
-  }
-  return "";
-}
-
 async function readFeed(env: Env): Promise<Feed> {
   const raw = await env.FEED.get(FEED_KEY);
   if (!raw) return emptyFeed();
@@ -64,100 +54,129 @@ async function readFeed(env: Env): Promise<Feed> {
   }
 }
 
-async function readToken(env: Env): Promise<TokenRecord | null> {
-  const raw = await env.FEED.get(TOKEN_KEY);
+function accountFrom(value: unknown): IntervalsAccount | null {
+  if (!value || typeof value !== "object") return null;
+  const row = value as Record<string, unknown>;
+  const apiKey = typeof row.apiKey === "string" ? row.apiKey : "";
+  const athleteId = typeof row.athleteId === "string" ? row.athleteId : "";
+  if (!/^[A-Za-z0-9_-]{8,128}$/.test(apiKey)) return null;
+  if (!/^i?\d{1,20}$/.test(athleteId)) return null;
+  const athleteName = typeof row.athleteName === "string" ? row.athleteName.slice(0, 80) : undefined;
+  return { apiKey, athleteId, athleteName };
+}
+
+async function readAccount(env: Env): Promise<IntervalsAccount | null> {
+  const raw = await env.FEED.get(ACCOUNT_KEY);
   if (!raw) return null;
   try {
-    const parsed = JSON.parse(raw) as Partial<TokenRecord>;
-    if (!parsed.accessToken || !parsed.refreshToken || !parsed.expiresAt) return null;
-    return {
-      accessToken: parsed.accessToken,
-      refreshToken: parsed.refreshToken,
-      expiresAt: parsed.expiresAt,
-      athleteName: typeof parsed.athleteName === "string" ? parsed.athleteName : undefined,
-    };
+    return accountFrom(JSON.parse(raw));
   } catch {
     return null;
   }
 }
 
-async function saveToken(env: Env, record: TokenRecord): Promise<void> {
-  await env.FEED.put(TOKEN_KEY, JSON.stringify(record));
+async function saveAccount(env: Env, account: IntervalsAccount): Promise<void> {
+  await env.FEED.put(ACCOUNT_KEY, JSON.stringify(account));
 }
 
-function tokenFromJson(body: Record<string, unknown>, nowSec: number): TokenRecord | null {
-  const accessToken = typeof body.access_token === "string" ? body.access_token : "";
-  const refreshToken = typeof body.refresh_token === "string" ? body.refresh_token : "";
-  const expiresAt =
-    typeof body.expires_at === "number"
-      ? body.expires_at
-      : typeof body.expires_in === "number"
-        ? nowSec + body.expires_in
-        : 0;
-  if (!accessToken || !refreshToken || !expiresAt) return null;
-  const athlete = body.athlete;
-  let athleteName: string | undefined;
-  if (athlete && typeof athlete === "object") {
-    const row = athlete as Record<string, unknown>;
-    const first = typeof row.firstname === "string" ? row.firstname.trim() : "";
-    const last = typeof row.lastname === "string" ? row.lastname.trim() : "";
-    const name = [first, last].filter(Boolean).join(" ").slice(0, 80);
-    if (name) athleteName = name;
-  }
-  return { accessToken, refreshToken, expiresAt, athleteName };
+function basic(apiKey: string): string {
+  return `Basic ${btoa(`API_KEY:${apiKey}`)}`;
 }
 
-async function ensureAccess(env: Env, fetchImpl: FetchImpl): Promise<string> {
-  const now = Math.floor(Date.now() / 1000);
-  const stored = await readToken(env);
-  if (stored && stored.expiresAt > now + 120) return stored.accessToken;
-
-  const refreshToken = stored?.refreshToken || env.STRAVA_REFRESH_TOKEN;
-  if (!refreshToken || !env.STRAVA_CLIENT_ID || !env.STRAVA_CLIENT_SECRET) {
-    throw new Error("Strava is not connected");
-  }
-
-  const res = await fetchImpl(TOKEN_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id: env.STRAVA_CLIENT_ID,
-      client_secret: env.STRAVA_CLIENT_SECRET,
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-    }),
-  });
-  if (!res.ok) throw new Error(`token refresh failed (${res.status})`);
-  const next = tokenFromJson((await res.json()) as Record<string, unknown>, now);
-  if (!next) throw new Error("token refresh returned no token");
-  if (!next.athleteName && stored?.athleteName) next.athleteName = stored.athleteName;
-  await saveToken(env, next);
-  return next.accessToken;
+function day(offset: number): string {
+  return new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
 }
 
-export async function refreshFeed(env: Env, fetchImpl: FetchImpl = fetch): Promise<Feed> {
+function athleteFrom(body: unknown): { id: string; name?: string } | null {
+  if (!body || typeof body !== "object") return null;
+  const row = body as Record<string, unknown>;
+  const id = typeof row.id === "number" ? String(row.id) : typeof row.id === "string" ? row.id : "";
+  if (!/^i?\d{1,20}$/.test(id)) return null;
+  const named = typeof row.name === "string" ? row.name.trim() : "";
+  const first = typeof row.firstname === "string" ? row.firstname.trim() : "";
+  const last = typeof row.lastname === "string" ? row.lastname.trim() : "";
+  const name = (named || [first, last].filter(Boolean).join(" ")).slice(0, 80);
+  return { id, name: name || undefined };
+}
+
+async function failureDetail(res: Response): Promise<string> {
   try {
-    const access = await ensureAccess(env, fetchImpl);
-    const res = await fetchImpl(ACTIVITIES_URL, {
-      headers: { Authorization: `Bearer ${access}` },
-    });
-    if (!res.ok) throw new Error(`activities failed (${res.status})`);
+    const body = (await res.json()) as Record<string, unknown>;
+    const message = typeof body.message === "string" ? body.message.slice(0, 80) : "";
+    return message;
+  } catch {
+    return "";
+  }
+}
+
+async function noteSyncFailure(env: Env, error: unknown): Promise<void> {
+  const message = error instanceof Error ? error.message.slice(0, 180) : "refresh failed";
+  await env.FEED.put(SYNC_KEY, JSON.stringify({ at: new Date().toISOString(), message }));
+}
+
+async function recentSyncFailure(env: Env): Promise<boolean> {
+  const raw = await env.FEED.get(SYNC_KEY);
+  if (!raw) return false;
+  try {
+    const parsed = JSON.parse(raw) as { at?: string };
+    const at = typeof parsed.at === "string" ? Date.parse(parsed.at) : Number.NaN;
+    return Number.isFinite(at) && Date.now() - at < SYNC_BACKOFF_MS;
+  } catch {
+    return false;
+  }
+}
+
+export async function refreshFeed(
+  env: Env,
+  fetchImpl: FetchImpl = fetch,
+  known?: IntervalsAccount | null,
+): Promise<Feed> {
+  try {
+    const account = known?.apiKey ? known : await readAccount(env);
+    if (!account) throw new Error("Intervals.icu is not connected");
+    const url = `https://intervals.icu/api/v1/athlete/${account.athleteId}/activities?oldest=${day(-120)}&newest=${day(1)}`;
+    const res = await fetchImpl(url, { headers: { Authorization: basic(account.apiKey) } });
+    if (!res.ok) {
+      const detail = await failureDetail(res);
+      throw new Error(detail ? `activities failed (${res.status}) ${detail}` : `activities failed (${res.status})`);
+    }
     const feed: Feed = {
-      source: "strava",
+      source: "intervals",
       updatedAt: new Date().toISOString(),
       stale: false,
       activities: sanitizeActivities(await res.json()),
     };
     await env.FEED.put(FEED_KEY, JSON.stringify(feed));
+    await env.FEED.delete(SYNC_KEY);
     return feed;
   } catch (error) {
+    await noteSyncFailure(env, error);
     const existing = await readFeed(env);
-    if (existing.source === "strava") {
+    if (existing.source === "intervals") {
       const stale: Feed = { ...existing, stale: true };
       await env.FEED.put(FEED_KEY, JSON.stringify(stale));
       return stale;
     }
     throw error;
+  }
+}
+
+async function serveFeed(env: Env, fetchImpl: FetchImpl): Promise<Feed> {
+  const raw = await env.FEED.get(FEED_KEY);
+  if (raw) {
+    try {
+      return toPublicFeed(JSON.parse(raw));
+    } catch {
+      return emptyFeed();
+    }
+  }
+  if (await recentSyncFailure(env)) return emptyFeed();
+  const account = await readAccount(env);
+  if (!account) return emptyFeed();
+  try {
+    return await refreshFeed(env, fetchImpl, account);
+  } catch {
+    return emptyFeed();
   }
 }
 
@@ -173,12 +192,14 @@ function page(body: string): Response {
   const html = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Strava feed</title>
+<title>Activity feed</title>
 <style>
   body { font: 16px/1.5 Georgia, serif; margin: 0; background: #f6f1e7; color: #1c1915; }
   main { max-width: 28rem; margin: 0 auto; padding: 3rem 1.25rem; }
-  a, button { font: inherit; }
+  a, button, input { font: inherit; }
   button, .login { display: inline-flex; align-items: center; min-height: 2.75rem; margin-top: 1rem; padding: 0 1rem; border-radius: 999px; background: #1c1915; color: #f6f1e7; text-decoration: none; border: 0; }
+  input { display: block; width: 100%; box-sizing: border-box; margin-top: 0.35rem; padding: 0.6rem 0.75rem; border: 1px solid #d9d0c1; border-radius: 0.75rem; background: #fffdf8; }
+  label { display: block; margin-top: 1rem; }
   p.note { color: #5c564c; }
 </style>
 <main>
@@ -193,100 +214,78 @@ ${body}
   });
 }
 
+function keyForm(): string {
+  return `<form method="post" action="/connect">
+<label>Intervals.icu API key
+<input name="apiKey" type="password" autocomplete="off" required>
+</label>
+<button type="submit">Save key</button>
+</form>
+<p class="note">In Intervals.icu: Settings, Developer, create a key. Garmin should be the connected source, not Strava. The key stays on this worker.</p>`;
+}
+
+async function syncHint(env: Env): Promise<string> {
+  const raw = await env.FEED.get(SYNC_KEY);
+  if (!raw) return "";
+  try {
+    const parsed = JSON.parse(raw) as { message?: string };
+    return typeof parsed.message === "string" && parsed.message ? "The activity pull failed. It will retry shortly." : "";
+  } catch {
+    return "";
+  }
+}
+
 async function statusPage(request: Request, env: Env): Promise<Response> {
   const error = new URL(request.url).searchParams.get("error");
-  const token = await readToken(env);
+  const replace = new URL(request.url).searchParams.get("replace");
+  const account = await readAccount(env);
   const feed = await readFeed(env);
+  const hint = await syncHint(env);
   const problem =
-    error === "declined"
-      ? "Strava authorisation was declined."
-      : error === "state"
-        ? "That login expired. Try again."
-        : error === "token"
-          ? "Strava did not accept that login."
-          : error === "refresh"
-            ? "The cache refresh failed. The cron will retry."
-            : "";
-  if (!token) {
-    return page(`<h1>Connect Strava</h1>
+    error === "key"
+      ? "Intervals.icu did not accept that key."
+      : error === "refresh"
+        ? "The cache refresh failed. It will retry shortly."
+        : hint;
+  if (!account || replace) {
+    return page(`<h1>${account ? "Replace key" : "Connect Intervals.icu"}</h1>
 <p class="note">This page is for you. The homepage only reads the public feed.</p>
 ${problem ? `<p>${escapeHtml(problem)}</p>` : ""}
-<p><a class="login" href="/oauth/start">Log in with Strava</a></p>`);
+${keyForm()}`);
   }
-  const who = token.athleteName ? escapeHtml(token.athleteName) : "your account";
+  const who = account.athleteName ? escapeHtml(account.athleteName) : "your account";
   const when = feed.updatedAt ? escapeHtml(feed.updatedAt) : "not yet";
   return page(`<h1>Connected</h1>
 <p>Signed in as ${who}. ${feed.activities.length} activities cached${feed.stale ? ", last refresh failed" : ""}. Updated ${when}.</p>
 ${problem ? `<p>${escapeHtml(problem)}</p>` : ""}
 <form method="post" action="/refresh"><button type="submit">Refresh now</button></form>
-<p><a href="/oauth/start">Log in again</a></p>`);
+<p><a href="/?replace=1">Replace key</a></p>`);
 }
 
-async function startOauth(request: Request, env: Env): Promise<Response> {
-  if (!env.STRAVA_CLIENT_ID || !env.STRAVA_CLIENT_SECRET) return text("Strava client id and secret are not set", 500);
-  const state = crypto.randomUUID();
-  await env.FEED.put(`oauth:${state}`, "1", { expirationTtl: 600 });
-  const redirectUri = new URL("/oauth/callback", request.url).toString();
-  const params = new URLSearchParams({
-    client_id: env.STRAVA_CLIENT_ID,
-    redirect_uri: redirectUri,
-    response_type: "code",
-    approval_prompt: "auto",
-    scope: "activity:read",
-    state,
-  });
-  return new Response(null, {
-    status: 302,
-    headers: {
-      Location: `https://www.strava.com/oauth/authorize?${params}`,
-      "Cache-Control": "no-store",
-      "Set-Cookie": `oauth_state=${state}; HttpOnly; Secure; SameSite=Lax; Path=/oauth; Max-Age=600`,
-    },
-  });
-}
-
-async function finishOauth(request: Request, env: Env, fetchImpl: FetchImpl): Promise<Response> {
-  const url = new URL(request.url);
-  const code = url.searchParams.get("code") ?? "";
-  const state = url.searchParams.get("state") ?? "";
-  const cookie = readCookie(request, "oauth_state");
-  const pending = state ? await env.FEED.get(`oauth:${state}`) : null;
-  if (pending) await env.FEED.delete(`oauth:${state}`);
+async function connect(request: Request, env: Env, fetchImpl: FetchImpl): Promise<Response> {
+  const form = await request.formData();
+  const apiKey = String(form.get("apiKey") ?? "").trim();
   const home = new URL("/", request.url);
-  if (url.searchParams.get("error")) {
-    home.searchParams.set("error", "declined");
-    return Response.redirect(home, 302);
+  if (!/^[A-Za-z0-9_-]{8,128}$/.test(apiKey)) {
+    home.searchParams.set("error", "key");
+    return Response.redirect(home, 303);
   }
-  if (!code || !pending || cookie !== state) {
-    home.searchParams.set("error", "state");
-    return Response.redirect(home, 302);
+  const res = await fetchImpl(ATHLETE_URL, { headers: { Authorization: basic(apiKey) } });
+  const athlete = res.ok ? athleteFrom(await res.json()) : null;
+  if (!athlete) {
+    home.searchParams.set("error", "key");
+    return Response.redirect(home, 303);
   }
-
-  const res = await fetchImpl(TOKEN_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id: env.STRAVA_CLIENT_ID,
-      client_secret: env.STRAVA_CLIENT_SECRET,
-      code,
-      grant_type: "authorization_code",
-    }),
-  });
-  const record = res.ok
-    ? tokenFromJson((await res.json()) as Record<string, unknown>, Math.floor(Date.now() / 1000))
-    : null;
-  if (!record) {
-    home.searchParams.set("error", "token");
-    return Response.redirect(home, 302);
-  }
-  await saveToken(env, record);
+  const account: IntervalsAccount = { apiKey, athleteId: athlete.id, athleteName: athlete.name };
+  await saveAccount(env, account);
+  await env.FEED.delete("token");
   try {
-    await refreshFeed(env, fetchImpl);
+    await refreshFeed(env, fetchImpl, account);
   } catch {
     home.searchParams.set("error", "refresh");
   }
   home.searchParams.set("connected", "1");
-  return Response.redirect(home, 302);
+  return Response.redirect(home, 303);
 }
 
 export async function handleRequest(
@@ -302,14 +301,11 @@ export async function handleRequest(
   }
 
   if (path === "/feed.json" && request.method === "GET") {
-    return json(await readFeed(env), cors(request, env));
+    return json(await serveFeed(env, fetchImpl), cors(request, env));
   }
 
   if (path === "/" && request.method === "GET") return statusPage(request, env);
-  if (path === "/oauth/start" && request.method === "GET") return startOauth(request, env);
-  if (path === "/oauth/callback" && request.method === "GET") {
-    return finishOauth(request, env, fetchImpl);
-  }
+  if (path === "/connect" && request.method === "POST") return connect(request, env, fetchImpl);
 
   if (path === "/refresh" && request.method === "POST") {
     try {

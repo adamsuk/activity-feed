@@ -9,20 +9,19 @@ export type CachedActivity = {
   movingS: number;
   elevationM: number;
   location: string;
-  stravaUrl: string;
+  url: string;
 };
 
 export type Feed = {
-  source: "strava" | "empty";
+  source: "intervals" | "empty";
   updatedAt: string | null;
   stale: boolean;
   activities: CachedActivity[];
 };
 
-export type TokenRecord = {
-  accessToken: string;
-  refreshToken: string;
-  expiresAt: number;
+export type IntervalsAccount = {
+  apiKey: string;
+  athleteId: string;
   athleteName?: string;
 };
 
@@ -35,10 +34,6 @@ export interface Kv {
 
 export interface Env {
   FEED: Kv;
-  STRAVA_CLIENT_ID: string;
-  STRAVA_CLIENT_SECRET: string;
-  /** Optional. The Strava login stores the refresh token in KV, which wins after that. */
-  STRAVA_REFRESH_TOKEN?: string;
   /** Comma-separated. Defaults to the public site. */
   ALLOWED_ORIGINS?: string;
 }

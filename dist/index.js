@@ -36,16 +36,17 @@ function sanitizeActivity(raw) {
   const row = raw;
   if (row.private === true) return null;
   const idNum = typeof row.id === "number" ? row.id : Number(row.id);
-  if (!Number.isSafeInteger(idNum) || idNum <= 0) return null;
+  const id = typeof row.id === "string" && /^i\d{1,20}$/.test(row.id) ? row.id : Number.isSafeInteger(idNum) && idNum > 0 ? String(idNum) : "";
+  if (!id) return null;
   const distance = finite(row.distance);
   const moving = finite(row.moving_time);
-  const elevation = finite(row.total_elevation_gain);
-  const start = cleanText(row.start_date, 40);
-  if (distance === null || moving === null || elevation === null || !start) return null;
+  const elevation = finite(row.total_elevation_gain) ?? 0;
+  const start = cleanText(row.start_date, 40) || cleanText(row.start_date_local, 40);
+  if (distance === null || moving === null || !start) return null;
   const city = cleanText(row.location_city, 40);
   const region = cleanText(row.location_state, 40);
   return {
-    id: String(idNum),
+    id,
     name: cleanText(row.name, 80) || "Activity",
     sport: mapSport(row.sport_type, row.type),
     start,
@@ -53,7 +54,7 @@ function sanitizeActivity(raw) {
     movingS: Math.round(moving),
     elevationM: Math.round(elevation),
     location: [city, region].filter(Boolean).join(", "),
-    stravaUrl: `https://www.strava.com/activities/${idNum}`
+    url: `https://intervals.icu/activities/${id}`
   };
 }
 function sanitizeActivities(raw) {
@@ -62,23 +63,23 @@ function sanitizeActivities(raw) {
   for (const row of raw) {
     const activity = sanitizeActivity(row);
     if (activity) activities.push(activity);
-    if (activities.length === 30) break;
   }
-  return activities;
+  activities.sort((a, b) => a.start < b.start ? 1 : a.start > b.start ? -1 : 0);
+  return activities.slice(0, 30);
 }
 function publicActivity(raw) {
   if (!raw || typeof raw !== "object") return null;
   const row = raw;
   const id = typeof row.id === "string" ? row.id : "";
-  if (!/^\d{1,20}$/.test(id)) return null;
+  if (!/^i?\d{1,20}$/.test(id)) return null;
   if (typeof row.sport !== "string" || !PUBLIC_SPORTS.has(row.sport)) return null;
   const distanceM = finite(row.distanceM);
   const movingS = finite(row.movingS);
   const elevationM = finite(row.elevationM);
   const start = cleanText(row.start, 40);
-  const stravaUrl = cleanText(row.stravaUrl, 80);
+  const url = cleanText(row.url, 80);
   if (distanceM === null || movingS === null || elevationM === null || !start) return null;
-  if (!stravaUrl.startsWith(`https://www.strava.com/activities/${id}`)) return null;
+  if (url !== `https://intervals.icu/activities/${id}`) return null;
   return {
     id,
     name: cleanText(row.name, 80) || "Activity",
@@ -88,7 +89,7 @@ function publicActivity(raw) {
     movingS: Math.round(movingS),
     elevationM: Math.round(elevationM),
     location: cleanText(row.location, 80),
-    stravaUrl
+    url
   };
 }
 function toPublicFeed(value) {
@@ -103,7 +104,7 @@ function toPublicFeed(value) {
     }
   }
   return {
-    source: row.source === "strava" ? "strava" : "empty",
+    source: row.source === "intervals" ? "intervals" : "empty",
     updatedAt: typeof row.updatedAt === "string" ? row.updatedAt : null,
     stale: row.stale === true,
     activities
@@ -112,9 +113,10 @@ function toPublicFeed(value) {
 
 // worker/src/index.ts
 var FEED_KEY = "feed";
-var TOKEN_KEY = "token";
-var TOKEN_URL = "https://www.strava.com/oauth/token";
-var ACTIVITIES_URL = "https://www.strava.com/api/v3/athlete/activities?per_page=30";
+var ACCOUNT_KEY = "intervals";
+var SYNC_KEY = "sync";
+var SYNC_BACKOFF_MS = 5 * 60 * 1e3;
+var ATHLETE_URL = "https://intervals.icu/api/v1/athlete";
 var DEFAULT_ORIGINS = "https://sradams.co.uk,https://www.sradams.co.uk";
 function origins(env) {
   return (env.ALLOWED_ORIGINS || DEFAULT_ORIGINS).split(",").map((origin) => origin.trim()).filter(Boolean);
@@ -143,14 +145,6 @@ function text(body, status, extra) {
   headers.set("X-Robots-Tag", "noindex");
   return new Response(body, { status, headers });
 }
-function readCookie(request, name) {
-  const raw = request.headers.get("Cookie") ?? "";
-  for (const part of raw.split(";")) {
-    const [key, ...rest] = part.trim().split("=");
-    if (key === name) return decodeURIComponent(rest.join("="));
-  }
-  return "";
-}
 async function readFeed(env) {
   const raw = await env.FEED.get(FEED_KEY);
   if (!raw) return emptyFeed();
@@ -160,89 +154,115 @@ async function readFeed(env) {
     return emptyFeed();
   }
 }
-async function readToken(env) {
-  const raw = await env.FEED.get(TOKEN_KEY);
+function accountFrom(value) {
+  if (!value || typeof value !== "object") return null;
+  const row = value;
+  const apiKey = typeof row.apiKey === "string" ? row.apiKey : "";
+  const athleteId = typeof row.athleteId === "string" ? row.athleteId : "";
+  if (!/^[A-Za-z0-9_-]{8,128}$/.test(apiKey)) return null;
+  if (!/^i?\d{1,20}$/.test(athleteId)) return null;
+  const athleteName = typeof row.athleteName === "string" ? row.athleteName.slice(0, 80) : void 0;
+  return { apiKey, athleteId, athleteName };
+}
+async function readAccount(env) {
+  const raw = await env.FEED.get(ACCOUNT_KEY);
   if (!raw) return null;
   try {
-    const parsed = JSON.parse(raw);
-    if (!parsed.accessToken || !parsed.refreshToken || !parsed.expiresAt) return null;
-    return {
-      accessToken: parsed.accessToken,
-      refreshToken: parsed.refreshToken,
-      expiresAt: parsed.expiresAt,
-      athleteName: typeof parsed.athleteName === "string" ? parsed.athleteName : void 0
-    };
+    return accountFrom(JSON.parse(raw));
   } catch {
     return null;
   }
 }
-async function saveToken(env, record) {
-  await env.FEED.put(TOKEN_KEY, JSON.stringify(record));
+async function saveAccount(env, account) {
+  await env.FEED.put(ACCOUNT_KEY, JSON.stringify(account));
 }
-function tokenFromJson(body, nowSec) {
-  const accessToken = typeof body.access_token === "string" ? body.access_token : "";
-  const refreshToken = typeof body.refresh_token === "string" ? body.refresh_token : "";
-  const expiresAt = typeof body.expires_at === "number" ? body.expires_at : typeof body.expires_in === "number" ? nowSec + body.expires_in : 0;
-  if (!accessToken || !refreshToken || !expiresAt) return null;
-  const athlete = body.athlete;
-  let athleteName;
-  if (athlete && typeof athlete === "object") {
-    const row = athlete;
-    const first = typeof row.firstname === "string" ? row.firstname.trim() : "";
-    const last = typeof row.lastname === "string" ? row.lastname.trim() : "";
-    const name = [first, last].filter(Boolean).join(" ").slice(0, 80);
-    if (name) athleteName = name;
-  }
-  return { accessToken, refreshToken, expiresAt, athleteName };
+function basic(apiKey) {
+  return `Basic ${btoa(`API_KEY:${apiKey}`)}`;
 }
-async function ensureAccess(env, fetchImpl) {
-  const now = Math.floor(Date.now() / 1e3);
-  const stored = await readToken(env);
-  if (stored && stored.expiresAt > now + 120) return stored.accessToken;
-  const refreshToken = stored?.refreshToken || env.STRAVA_REFRESH_TOKEN;
-  if (!refreshToken || !env.STRAVA_CLIENT_ID || !env.STRAVA_CLIENT_SECRET) {
-    throw new Error("Strava is not connected");
-  }
-  const res = await fetchImpl(TOKEN_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id: env.STRAVA_CLIENT_ID,
-      client_secret: env.STRAVA_CLIENT_SECRET,
-      grant_type: "refresh_token",
-      refresh_token: refreshToken
-    })
-  });
-  if (!res.ok) throw new Error(`token refresh failed (${res.status})`);
-  const next = tokenFromJson(await res.json(), now);
-  if (!next) throw new Error("token refresh returned no token");
-  if (!next.athleteName && stored?.athleteName) next.athleteName = stored.athleteName;
-  await saveToken(env, next);
-  return next.accessToken;
+function day(offset) {
+  return new Date(Date.now() + offset * 864e5).toISOString().slice(0, 10);
 }
-async function refreshFeed(env, fetchImpl = fetch) {
+function athleteFrom(body) {
+  if (!body || typeof body !== "object") return null;
+  const row = body;
+  const id = typeof row.id === "number" ? String(row.id) : typeof row.id === "string" ? row.id : "";
+  if (!/^i?\d{1,20}$/.test(id)) return null;
+  const named = typeof row.name === "string" ? row.name.trim() : "";
+  const first = typeof row.firstname === "string" ? row.firstname.trim() : "";
+  const last = typeof row.lastname === "string" ? row.lastname.trim() : "";
+  const name = (named || [first, last].filter(Boolean).join(" ")).slice(0, 80);
+  return { id, name: name || void 0 };
+}
+async function failureDetail(res) {
   try {
-    const access = await ensureAccess(env, fetchImpl);
-    const res = await fetchImpl(ACTIVITIES_URL, {
-      headers: { Authorization: `Bearer ${access}` }
-    });
-    if (!res.ok) throw new Error(`activities failed (${res.status})`);
+    const body = await res.json();
+    const message = typeof body.message === "string" ? body.message.slice(0, 80) : "";
+    return message;
+  } catch {
+    return "";
+  }
+}
+async function noteSyncFailure(env, error) {
+  const message = error instanceof Error ? error.message.slice(0, 180) : "refresh failed";
+  await env.FEED.put(SYNC_KEY, JSON.stringify({ at: (/* @__PURE__ */ new Date()).toISOString(), message }));
+}
+async function recentSyncFailure(env) {
+  const raw = await env.FEED.get(SYNC_KEY);
+  if (!raw) return false;
+  try {
+    const parsed = JSON.parse(raw);
+    const at = typeof parsed.at === "string" ? Date.parse(parsed.at) : Number.NaN;
+    return Number.isFinite(at) && Date.now() - at < SYNC_BACKOFF_MS;
+  } catch {
+    return false;
+  }
+}
+async function refreshFeed(env, fetchImpl = fetch, known) {
+  try {
+    const account = known?.apiKey ? known : await readAccount(env);
+    if (!account) throw new Error("Intervals.icu is not connected");
+    const url = `https://intervals.icu/api/v1/athlete/${account.athleteId}/activities?oldest=${day(-120)}&newest=${day(1)}`;
+    const res = await fetchImpl(url, { headers: { Authorization: basic(account.apiKey) } });
+    if (!res.ok) {
+      const detail = await failureDetail(res);
+      throw new Error(detail ? `activities failed (${res.status}) ${detail}` : `activities failed (${res.status})`);
+    }
     const feed = {
-      source: "strava",
+      source: "intervals",
       updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
       stale: false,
       activities: sanitizeActivities(await res.json())
     };
     await env.FEED.put(FEED_KEY, JSON.stringify(feed));
+    await env.FEED.delete(SYNC_KEY);
     return feed;
   } catch (error) {
+    await noteSyncFailure(env, error);
     const existing = await readFeed(env);
-    if (existing.source === "strava") {
+    if (existing.source === "intervals") {
       const stale = { ...existing, stale: true };
       await env.FEED.put(FEED_KEY, JSON.stringify(stale));
       return stale;
     }
     throw error;
+  }
+}
+async function serveFeed(env, fetchImpl) {
+  const raw = await env.FEED.get(FEED_KEY);
+  if (raw) {
+    try {
+      return toPublicFeed(JSON.parse(raw));
+    } catch {
+      return emptyFeed();
+    }
+  }
+  if (await recentSyncFailure(env)) return emptyFeed();
+  const account = await readAccount(env);
+  if (!account) return emptyFeed();
+  try {
+    return await refreshFeed(env, fetchImpl, account);
+  } catch {
+    return emptyFeed();
   }
 }
 function escapeHtml(value) {
@@ -252,12 +272,14 @@ function page(body) {
   const html = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Strava feed</title>
+<title>Activity feed</title>
 <style>
   body { font: 16px/1.5 Georgia, serif; margin: 0; background: #f6f1e7; color: #1c1915; }
   main { max-width: 28rem; margin: 0 auto; padding: 3rem 1.25rem; }
-  a, button { font: inherit; }
+  a, button, input { font: inherit; }
   button, .login { display: inline-flex; align-items: center; min-height: 2.75rem; margin-top: 1rem; padding: 0 1rem; border-radius: 999px; background: #1c1915; color: #f6f1e7; text-decoration: none; border: 0; }
+  input { display: block; width: 100%; box-sizing: border-box; margin-top: 0.35rem; padding: 0.6rem 0.75rem; border: 1px solid #d9d0c1; border-radius: 0.75rem; background: #fffdf8; }
+  label { display: block; margin-top: 1rem; }
   p.note { color: #5c564c; }
 </style>
 <main>
@@ -271,86 +293,70 @@ ${body}
     }
   });
 }
+function keyForm() {
+  return `<form method="post" action="/connect">
+<label>Intervals.icu API key
+<input name="apiKey" type="password" autocomplete="off" required>
+</label>
+<button type="submit">Save key</button>
+</form>
+<p class="note">In Intervals.icu: Settings, Developer, create a key. Garmin should be the connected source, not Strava. The key stays on this worker.</p>`;
+}
+async function syncHint(env) {
+  const raw = await env.FEED.get(SYNC_KEY);
+  if (!raw) return "";
+  try {
+    const parsed = JSON.parse(raw);
+    return typeof parsed.message === "string" && parsed.message ? "The activity pull failed. It will retry shortly." : "";
+  } catch {
+    return "";
+  }
+}
 async function statusPage(request, env) {
   const error = new URL(request.url).searchParams.get("error");
-  const token = await readToken(env);
+  const replace = new URL(request.url).searchParams.get("replace");
+  const account = await readAccount(env);
   const feed = await readFeed(env);
-  const problem = error === "declined" ? "Strava authorisation was declined." : error === "state" ? "That login expired. Try again." : error === "token" ? "Strava did not accept that login." : error === "refresh" ? "The cache refresh failed. The cron will retry." : "";
-  if (!token) {
-    return page(`<h1>Connect Strava</h1>
+  const hint = await syncHint(env);
+  const problem = error === "key" ? "Intervals.icu did not accept that key." : error === "refresh" ? "The cache refresh failed. It will retry shortly." : hint;
+  if (!account || replace) {
+    return page(`<h1>${account ? "Replace key" : "Connect Intervals.icu"}</h1>
 <p class="note">This page is for you. The homepage only reads the public feed.</p>
 ${problem ? `<p>${escapeHtml(problem)}</p>` : ""}
-<p><a class="login" href="/oauth/start">Log in with Strava</a></p>`);
+${keyForm()}`);
   }
-  const who = token.athleteName ? escapeHtml(token.athleteName) : "your account";
+  const who = account.athleteName ? escapeHtml(account.athleteName) : "your account";
   const when = feed.updatedAt ? escapeHtml(feed.updatedAt) : "not yet";
   return page(`<h1>Connected</h1>
 <p>Signed in as ${who}. ${feed.activities.length} activities cached${feed.stale ? ", last refresh failed" : ""}. Updated ${when}.</p>
 ${problem ? `<p>${escapeHtml(problem)}</p>` : ""}
 <form method="post" action="/refresh"><button type="submit">Refresh now</button></form>
-<p><a href="/oauth/start">Log in again</a></p>`);
+<p><a href="/?replace=1">Replace key</a></p>`);
 }
-async function startOauth(request, env) {
-  if (!env.STRAVA_CLIENT_ID || !env.STRAVA_CLIENT_SECRET) return text("Strava client id and secret are not set", 500);
-  const state = crypto.randomUUID();
-  await env.FEED.put(`oauth:${state}`, "1", { expirationTtl: 600 });
-  const redirectUri = new URL("/oauth/callback", request.url).toString();
-  const params = new URLSearchParams({
-    client_id: env.STRAVA_CLIENT_ID,
-    redirect_uri: redirectUri,
-    response_type: "code",
-    approval_prompt: "auto",
-    scope: "activity:read",
-    state
-  });
-  return new Response(null, {
-    status: 302,
-    headers: {
-      Location: `https://www.strava.com/oauth/authorize?${params}`,
-      "Cache-Control": "no-store",
-      "Set-Cookie": `oauth_state=${state}; HttpOnly; Secure; SameSite=Lax; Path=/oauth; Max-Age=600`
-    }
-  });
-}
-async function finishOauth(request, env, fetchImpl) {
-  const url = new URL(request.url);
-  const code = url.searchParams.get("code") ?? "";
-  const state = url.searchParams.get("state") ?? "";
-  const cookie = readCookie(request, "oauth_state");
-  const pending = state ? await env.FEED.get(`oauth:${state}`) : null;
-  if (pending) await env.FEED.delete(`oauth:${state}`);
+async function connect(request, env, fetchImpl) {
+  const form = await request.formData();
+  const apiKey = String(form.get("apiKey") ?? "").trim();
   const home = new URL("/", request.url);
-  if (url.searchParams.get("error")) {
-    home.searchParams.set("error", "declined");
-    return Response.redirect(home, 302);
+  if (!/^[A-Za-z0-9_-]{8,128}$/.test(apiKey)) {
+    home.searchParams.set("error", "key");
+    return Response.redirect(home, 303);
   }
-  if (!code || !pending || cookie !== state) {
-    home.searchParams.set("error", "state");
-    return Response.redirect(home, 302);
+  const res = await fetchImpl(ATHLETE_URL, { headers: { Authorization: basic(apiKey) } });
+  const athlete = res.ok ? athleteFrom(await res.json()) : null;
+  if (!athlete) {
+    home.searchParams.set("error", "key");
+    return Response.redirect(home, 303);
   }
-  const res = await fetchImpl(TOKEN_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id: env.STRAVA_CLIENT_ID,
-      client_secret: env.STRAVA_CLIENT_SECRET,
-      code,
-      grant_type: "authorization_code"
-    })
-  });
-  const record = res.ok ? tokenFromJson(await res.json(), Math.floor(Date.now() / 1e3)) : null;
-  if (!record) {
-    home.searchParams.set("error", "token");
-    return Response.redirect(home, 302);
-  }
-  await saveToken(env, record);
+  const account = { apiKey, athleteId: athlete.id, athleteName: athlete.name };
+  await saveAccount(env, account);
+  await env.FEED.delete("token");
   try {
-    await refreshFeed(env, fetchImpl);
+    await refreshFeed(env, fetchImpl, account);
   } catch {
     home.searchParams.set("error", "refresh");
   }
   home.searchParams.set("connected", "1");
-  return Response.redirect(home, 302);
+  return Response.redirect(home, 303);
 }
 async function handleRequest(request, env, fetchImpl = fetch) {
   const url = new URL(request.url);
@@ -359,13 +365,10 @@ async function handleRequest(request, env, fetchImpl = fetch) {
     return new Response(null, { status: 204, headers: cors(request, env) });
   }
   if (path === "/feed.json" && request.method === "GET") {
-    return json(await readFeed(env), cors(request, env));
+    return json(await serveFeed(env, fetchImpl), cors(request, env));
   }
   if (path === "/" && request.method === "GET") return statusPage(request, env);
-  if (path === "/oauth/start" && request.method === "GET") return startOauth(request, env);
-  if (path === "/oauth/callback" && request.method === "GET") {
-    return finishOauth(request, env, fetchImpl);
-  }
+  if (path === "/connect" && request.method === "POST") return connect(request, env, fetchImpl);
   if (path === "/refresh" && request.method === "POST") {
     try {
       await refreshFeed(env, fetchImpl);

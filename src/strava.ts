@@ -48,19 +48,25 @@ export function sanitizeActivity(raw: unknown): CachedActivity | null {
   if (row.private === true) return null;
 
   const idNum = typeof row.id === "number" ? row.id : Number(row.id);
-  if (!Number.isSafeInteger(idNum) || idNum <= 0) return null;
+  const id =
+    typeof row.id === "string" && /^i\d{1,20}$/.test(row.id)
+      ? row.id
+      : Number.isSafeInteger(idNum) && idNum > 0
+        ? String(idNum)
+        : "";
+  if (!id) return null;
 
   const distance = finite(row.distance);
   const moving = finite(row.moving_time);
-  const elevation = finite(row.total_elevation_gain);
-  const start = cleanText(row.start_date, 40);
-  if (distance === null || moving === null || elevation === null || !start) return null;
+  const elevation = finite(row.total_elevation_gain) ?? 0;
+  const start = cleanText(row.start_date, 40) || cleanText(row.start_date_local, 40);
+  if (distance === null || moving === null || !start) return null;
 
   const city = cleanText(row.location_city, 40);
   const region = cleanText(row.location_state, 40);
 
   return {
-    id: String(idNum),
+    id,
     name: cleanText(row.name, 80) || "Activity",
     sport: mapSport(row.sport_type, row.type),
     start,
@@ -68,7 +74,7 @@ export function sanitizeActivity(raw: unknown): CachedActivity | null {
     movingS: Math.round(moving),
     elevationM: Math.round(elevation),
     location: [city, region].filter(Boolean).join(", "),
-    stravaUrl: `https://www.strava.com/activities/${idNum}`,
+    url: `https://intervals.icu/activities/${id}`,
   };
 }
 
@@ -78,24 +84,24 @@ export function sanitizeActivities(raw: unknown): CachedActivity[] {
   for (const row of raw) {
     const activity = sanitizeActivity(row);
     if (activity) activities.push(activity);
-    if (activities.length === 30) break;
   }
-  return activities;
+  activities.sort((a, b) => (a.start < b.start ? 1 : a.start > b.start ? -1 : 0));
+  return activities.slice(0, 30);
 }
 
 function publicActivity(raw: unknown): CachedActivity | null {
   if (!raw || typeof raw !== "object") return null;
   const row = raw as Record<string, unknown>;
   const id = typeof row.id === "string" ? row.id : "";
-  if (!/^\d{1,20}$/.test(id)) return null;
+  if (!/^i?\d{1,20}$/.test(id)) return null;
   if (typeof row.sport !== "string" || !PUBLIC_SPORTS.has(row.sport as Sport)) return null;
   const distanceM = finite(row.distanceM);
   const movingS = finite(row.movingS);
   const elevationM = finite(row.elevationM);
   const start = cleanText(row.start, 40);
-  const stravaUrl = cleanText(row.stravaUrl, 80);
+  const url = cleanText(row.url, 80);
   if (distanceM === null || movingS === null || elevationM === null || !start) return null;
-  if (!stravaUrl.startsWith(`https://www.strava.com/activities/${id}`)) return null;
+  if (url !== `https://intervals.icu/activities/${id}`) return null;
   return {
     id,
     name: cleanText(row.name, 80) || "Activity",
@@ -105,7 +111,7 @@ function publicActivity(raw: unknown): CachedActivity | null {
     movingS: Math.round(movingS),
     elevationM: Math.round(elevationM),
     location: cleanText(row.location, 80),
-    stravaUrl,
+    url,
   };
 }
 
@@ -121,7 +127,7 @@ export function toPublicFeed(value: unknown): Feed {
     }
   }
   return {
-    source: row.source === "strava" ? "strava" : "empty",
+    source: row.source === "intervals" ? "intervals" : "empty",
     updatedAt: typeof row.updatedAt === "string" ? row.updatedAt : null,
     stale: row.stale === true,
     activities,
