@@ -1,4 +1,4 @@
-name = "sradams-activities"
+name = "strava-feed"
 main = "src/index.ts"
 compatibility_date = "2026-10-02"
 
@@ -6,7 +6,7 @@ compatibility_date = "2026-10-02"
 #   npx wrangler kv namespace create FEED
 [[kv_namespaces]]
 binding = "FEED"
-id = "00000000000000000000000000000000"
+id = "f0a57d469c054cfcaeb542423ca0ef68"
 
 [triggers]
 crons = ["*/30 * * * *"]
