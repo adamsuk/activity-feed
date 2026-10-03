@@ -32,7 +32,27 @@ Intervals already uses `INTERVALS_API_KEY` for one account. Leave it. To add ano
 ]
 ```
 
-Do not put tokens in git or in the homepage.
+Do not put tokens in git or in the homepage. `keep_vars` is set, so a plain variable you add in the dashboard is kept on deploy. Secrets are kept either way.
+
+## GitHub token
+
+Create one fine-grained token per account, while logged in as that account. Repository access: all repositories. Permissions:
+
+| Permission | Access |
+|---|---|
+| Contents | Read |
+| Pull requests | Read |
+| Issues | Read |
+
+Leave everything else, including Administration and Workflows, at no access. Metadata is included automatically.
+
+That is enough for private commits, pull requests, and issues to be counted. The feed still stores only the counts. If a company org uses single sign-on, authorize the token for that org or those contributions stay as a single private total.
+
+A classic token needs the `repo` scope to see the same private numbers. That scope can also write, so prefer the fine-grained token above.
+
+## Deploy
+
+Pushes to `main` run [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml). The repo secret `CF_API_TOKEN` is the same kind of Cloudflare token `blog-worker` uses: Workers Scripts edit, and Workers KV Storage edit, on this account. Add it under the activity-feed repository secrets. It is not copied across from the other repo.
 
 A cron refreshes the cache every half hour. `/` redirects to `/feed.json`.
 
