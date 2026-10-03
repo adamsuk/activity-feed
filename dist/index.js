@@ -1,4 +1,131 @@
-// worker/src/strava.ts
+// src/github.ts
+var GITHUB_GRAPHQL = "https://api.github.com/graphql";
+var WEEK_MS = 7 * 24 * 60 * 60 * 1e3;
+var GITHUB_ACCOUNTS = [
+  { login: "adamsuk", label: "Personal", envKey: "GITHUB_TOKEN_PERSONAL" },
+  { login: "sra405", label: "Work", envKey: "GITHUB_TOKEN_WORK" }
+];
+var FIELDS = `
+  contributionCalendar { totalContributions }
+  totalCommitContributions
+  totalPullRequestContributions
+  totalPullRequestReviewContributions
+  totalIssueContributions
+  restrictedContributionsCount
+`;
+var USER_QUERY = `query($login: String!, $from: DateTime!, $to: DateTime!) {
+  user(login: $login) {
+    contributionsCollection(from: $from, to: $to) { ${FIELDS} }
+  }
+}`;
+var VIEWER_QUERY = `query($from: DateTime!, $to: DateTime!) {
+  viewer {
+    login
+    contributionsCollection(from: $from, to: $to) { ${FIELDS} }
+  }
+}`;
+function cleanToken(value) {
+  let token = (value || "").trim();
+  if (/^bearer\s+/i.test(token)) token = token.slice(token.indexOf(" ") + 1).trim();
+  if (token.length < 20 || token.length > 300) return null;
+  if (/[^\x21-\x7e]/.test(token)) return null;
+  return token;
+}
+function weekRange(now = Date.now()) {
+  return {
+    from: new Date(now - WEEK_MS).toISOString(),
+    to: new Date(now).toISOString()
+  };
+}
+function count(value) {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 1e5) return 0;
+  return value;
+}
+function accountFromCollection(login, label, collection) {
+  const commits = count(collection?.totalCommitContributions);
+  const pullRequests = count(collection?.totalPullRequestContributions);
+  const reviews = count(collection?.totalPullRequestReviewContributions);
+  const issues = count(collection?.totalIssueContributions);
+  const restricted = count(collection?.restrictedContributionsCount);
+  const calendar = count(collection?.contributionCalendar?.totalContributions);
+  return {
+    login,
+    label,
+    contributions: Math.max(calendar, commits + pullRequests + reviews + issues + restricted),
+    commits,
+    pullRequests,
+    reviews,
+    issues
+  };
+}
+async function graphql(fetchImpl, token, query, variables) {
+  const headers = {
+    Accept: "application/json",
+    "Content-Type": "application/json",
+    "User-Agent": "sradams-activity-feed"
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetchImpl(GITHUB_GRAPHQL, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ query, variables })
+  });
+  if (!res.ok) throw new Error(`github failed (${res.status})`);
+  return await res.json();
+}
+async function loadAccount(fetchImpl, account, token, range) {
+  if (token) {
+    const body2 = await graphql(fetchImpl, token, VIEWER_QUERY, range);
+    const viewer = body2.data?.viewer;
+    if (viewer?.login === account.login) {
+      return accountFromCollection(account.login, account.label, viewer.contributionsCollection);
+    }
+  }
+  const body = await graphql(fetchImpl, null, USER_QUERY, { login: account.login, ...range });
+  const collection = body.data?.user?.contributionsCollection;
+  if (!collection) throw new Error(`github failed for ${account.login}`);
+  return accountFromCollection(account.login, account.label, collection);
+}
+async function loadGithubAccounts(env, fetchImpl, now = Date.now()) {
+  const range = weekRange(now);
+  const accounts = [];
+  for (const account of GITHUB_ACCOUNTS) {
+    const token = cleanToken(env[account.envKey]);
+    accounts.push(await loadAccount(fetchImpl, account, token, range));
+  }
+  return accounts;
+}
+var KNOWN = new Map(GITHUB_ACCOUNTS.map((account) => [account.login, account.label]));
+function toPublicGithub(value) {
+  if (!value || typeof value !== "object") return null;
+  const row = value;
+  if (!Array.isArray(row.accounts)) return null;
+  const accounts = [];
+  for (const item of row.accounts) {
+    if (!item || typeof item !== "object") continue;
+    const account = item;
+    const login = typeof account.login === "string" ? account.login : "";
+    const label = KNOWN.get(login);
+    if (!label) continue;
+    accounts.push({
+      login,
+      label,
+      contributions: count(account.contributions),
+      commits: count(account.commits),
+      pullRequests: count(account.pullRequests),
+      reviews: count(account.reviews),
+      issues: count(account.issues)
+    });
+  }
+  if (accounts.length !== GITHUB_ACCOUNTS.length) return null;
+  return {
+    updatedAt: typeof row.updatedAt === "string" ? row.updatedAt : null,
+    stale: row.stale === true,
+    accounts
+  };
+}
+
+// src/strava.ts
 var RUN = /* @__PURE__ */ new Set(["Run", "TrailRun", "VirtualRun"]);
 var RIDE = /* @__PURE__ */ new Set([
   "Ride",
@@ -111,18 +238,30 @@ function toPublicFeed(value) {
   };
 }
 
-// worker/src/index.ts
+// src/index.ts
 var FEED_KEY = "feed";
+var GITHUB_KEY = "github";
 var SYNC_KEY = "sync";
+var GITHUB_SYNC_KEY = "github-sync";
 var SYNC_BACKOFF_MS = 5 * 60 * 1e3;
 var DEFAULT_ORIGINS = "https://sradams.co.uk,https://www.sradams.co.uk";
+var PAGES_HOST = "sradams-co-uk-content.pages.dev";
 function origins(env) {
   return (env.ALLOWED_ORIGINS || DEFAULT_ORIGINS).split(",").map((origin) => origin.trim()).filter(Boolean);
+}
+function originAllowed(origin, env) {
+  if (origins(env).includes(origin)) return true;
+  try {
+    const url = new URL(origin);
+    return url.protocol === "https:" && (url.hostname === PAGES_HOST || url.hostname.endsWith(`.${PAGES_HOST}`));
+  } catch {
+    return false;
+  }
 }
 function cors(request, env) {
   const headers = new Headers();
   const origin = request.headers.get("Origin");
-  if (origin && origins(env).includes(origin)) {
+  if (origin && originAllowed(origin, env)) {
     headers.set("Access-Control-Allow-Origin", origin);
     headers.set("Vary", "Origin");
     headers.set("Access-Control-Allow-Methods", "GET, OPTIONS");
@@ -180,12 +319,12 @@ async function failureDetail(res) {
     return "";
   }
 }
-async function noteSyncFailure(env, error) {
+async function noteSyncFailure(env, key, error) {
   const message = error instanceof Error ? error.message.slice(0, 180) : "refresh failed";
-  await env.FEED.put(SYNC_KEY, JSON.stringify({ at: (/* @__PURE__ */ new Date()).toISOString(), message }));
+  await env.FEED.put(key, JSON.stringify({ at: (/* @__PURE__ */ new Date()).toISOString(), message }));
 }
-async function recentSyncFailure(env) {
-  const raw = await env.FEED.get(SYNC_KEY);
+async function recentFailure(env, key) {
+  const raw = await env.FEED.get(key);
   if (!raw) return false;
   try {
     const parsed = JSON.parse(raw);
@@ -221,7 +360,7 @@ async function refreshFeed(env, fetchImpl = fetch, known) {
     await env.FEED.delete("intervals");
     return feed;
   } catch (error) {
-    await noteSyncFailure(env, error);
+    await noteSyncFailure(env, SYNC_KEY, error);
     const existing = await readFeed(env);
     if (existing.source === "intervals") {
       const stale = { ...existing, stale: true };
@@ -229,6 +368,46 @@ async function refreshFeed(env, fetchImpl = fetch, known) {
       return stale;
     }
     throw error;
+  }
+}
+async function readGithub(env) {
+  const raw = await env.FEED.get(GITHUB_KEY);
+  if (!raw) return null;
+  try {
+    return toPublicGithub(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+async function refreshGithub(env, fetchImpl = fetch, now = Date.now()) {
+  try {
+    const snapshot = {
+      updatedAt: new Date(now).toISOString(),
+      stale: false,
+      accounts: await loadGithubAccounts(env, fetchImpl, now)
+    };
+    await env.FEED.put(GITHUB_KEY, JSON.stringify(snapshot));
+    await env.FEED.delete(GITHUB_SYNC_KEY);
+    return snapshot;
+  } catch (error) {
+    await noteSyncFailure(env, GITHUB_SYNC_KEY, error);
+    const existing = await readGithub(env);
+    if (existing) {
+      const stale = { ...existing, stale: true };
+      await env.FEED.put(GITHUB_KEY, JSON.stringify(stale));
+      return stale;
+    }
+    throw error;
+  }
+}
+async function serveGithub(env, fetchImpl) {
+  const cached = await readGithub(env);
+  if (cached) return cached;
+  if (await recentFailure(env, GITHUB_SYNC_KEY)) return null;
+  try {
+    return await refreshGithub(env, fetchImpl);
+  } catch {
+    return null;
   }
 }
 async function serveFeed(env, fetchImpl) {
@@ -240,10 +419,12 @@ async function serveFeed(env, fetchImpl) {
       return emptyFeed();
     }
   }
-  if (await recentSyncFailure(env)) return emptyFeed();
+  if (await recentFailure(env, SYNC_KEY)) return emptyFeed();
   if (!apiKeyFrom(env)) return emptyFeed();
   try {
-    return await refreshFeed(env, fetchImpl);
+    const feed = await refreshFeed(env, fetchImpl);
+    const github = await serveGithub(env, fetchImpl);
+    return github ? { ...feed, github } : feed;
   } catch {
     return emptyFeed();
   }
@@ -255,7 +436,9 @@ async function handleRequest(request, env, fetchImpl = fetch) {
     return new Response(null, { status: 204, headers: cors(request, env) });
   }
   if (path === "/feed.json" && request.method === "GET") {
-    return json(await serveFeed(env, fetchImpl), cors(request, env));
+    const feed = await serveFeed(env, fetchImpl);
+    const github = feed.github ?? await serveGithub(env, fetchImpl);
+    return json(github ? { ...feed, github } : feed, cors(request, env));
   }
   if (path === "/" && request.method === "GET") {
     return Response.redirect(new URL("/feed.json", request.url), 302);
@@ -268,14 +451,20 @@ var index_default = {
   },
   scheduled(_event, env, ctx) {
     ctx.waitUntil(
-      refreshFeed(env).catch((error) => {
-        console.error(error);
-      })
+      Promise.all([
+        refreshFeed(env).catch((error) => {
+          console.error(error);
+        }),
+        refreshGithub(env).catch((error) => {
+          console.error(error);
+        })
+      ])
     );
   }
 };
 export {
   index_default as default,
   handleRequest,
-  refreshFeed
+  refreshFeed,
+  refreshGithub
 };
