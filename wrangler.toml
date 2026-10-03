@@ -1,6 +1,8 @@
 name = "strava-feed"
+account_id = "fcaa04edb848e219bd85f8bfedb0c5b9"
 main = "src/index.ts"
 compatibility_date = "2026-10-02"
+keep_vars = true
 
 # Create the namespace, then paste its id here:
 #   npx wrangler kv namespace create FEED
