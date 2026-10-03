@@ -1,6 +1,7 @@
-import { loadGithubAccounts, toPublicGithub } from "./github.ts";
+import { accountsFromEnv, binding, secretName } from "./accounts.ts";
+import { githubAccounts, loadGithubAccounts, toPublicGithub } from "./github.ts";
 import { emptyFeed, sanitizeActivities, toPublicFeed } from "./strava.ts";
-import type { Env, Feed, GithubSnapshot, IntervalsAccount } from "./types.ts";
+import type { CachedActivity, Env, Feed, GithubSnapshot, IntervalsAccount } from "./types.ts";
 
 const FEED_KEY = "feed";
 const GITHUB_KEY = "github";
@@ -71,8 +72,8 @@ async function readFeed(env: Env): Promise<Feed> {
   }
 }
 
-function apiKeyFrom(env: Env): string | null {
-  let apiKey = (env.INTERVALS_API_KEY || "").trim();
+function cleanApiKey(value: string | undefined): string | null {
+  let apiKey = (value || "").trim();
   if (
     (apiKey.startsWith('"') && apiKey.endsWith('"')) ||
     (apiKey.startsWith("'") && apiKey.endsWith("'"))
@@ -83,6 +84,29 @@ function apiKeyFrom(env: Env): string | null {
   if (apiKey.length < 8 || apiKey.length > 200) return null;
   if (/[^\x21-\x7e]/.test(apiKey)) return null;
   return apiKey;
+}
+
+type ResolvedIntervals = {
+  id: string;
+  label: string;
+  apiKey: string;
+  athleteId: string;
+};
+
+function configuredIntervals(env: Env): ResolvedIntervals[] {
+  const listed = accountsFromEnv(env.INTERVALS_ACCOUNTS);
+  if (listed.length === 0) {
+    const apiKey = cleanApiKey(env.INTERVALS_API_KEY);
+    return apiKey ? [{ id: "personal", label: "", apiKey, athleteId: "0" }] : [];
+  }
+  const resolved: ResolvedIntervals[] = [];
+  for (const account of listed) {
+    const named = cleanApiKey(binding(env, secretName("INTERVALS_API_KEY", account.id)));
+    const apiKey = named || (account.id === "personal" ? cleanApiKey(env.INTERVALS_API_KEY) : null);
+    if (!apiKey) throw new Error(`Intervals key is not set for ${account.id}`);
+    resolved.push({ id: account.id, label: account.label, apiKey, athleteId: "0" });
+  }
+  return resolved;
 }
 
 function basic(apiKey: string): string {
@@ -120,10 +144,19 @@ async function recentFailure(env: Env, key: string): Promise<boolean> {
   }
 }
 
-async function resolveAccount(env: Env): Promise<IntervalsAccount> {
-  const apiKey = apiKeyFrom(env);
-  if (!apiKey) throw new Error("Intervals.icu API key is not set");
-  return { apiKey, athleteId: "0" };
+async function pullActivities(
+  account: ResolvedIntervals,
+  fetchImpl: FetchImpl,
+): Promise<CachedActivity[]> {
+  const url = `https://intervals.icu/api/v1/athlete/${account.athleteId}/activities?oldest=${day(-120)}&newest=${day(1)}`;
+  const res = await fetchImpl(url, { headers: { Authorization: basic(account.apiKey) } });
+  if (!res.ok) {
+    const detail = await failureDetail(res);
+    throw new Error(detail ? `activities failed (${res.status}) ${detail}` : `activities failed (${res.status})`);
+  }
+  const activities = sanitizeActivities(await res.json());
+  if (!account.label) return activities;
+  return activities.map((activity) => ({ ...activity, account: account.label }));
 }
 
 export async function refreshFeed(
@@ -132,18 +165,25 @@ export async function refreshFeed(
   known?: IntervalsAccount | null,
 ): Promise<Feed> {
   try {
-    const account = known?.apiKey ? known : await resolveAccount(env);
-    const url = `https://intervals.icu/api/v1/athlete/${account.athleteId}/activities?oldest=${day(-120)}&newest=${day(1)}`;
-    const res = await fetchImpl(url, { headers: { Authorization: basic(account.apiKey) } });
-    if (!res.ok) {
-      const detail = await failureDetail(res);
-      throw new Error(detail ? `activities failed (${res.status}) ${detail}` : `activities failed (${res.status})`);
+    const accounts: ResolvedIntervals[] = known?.apiKey
+      ? [{ id: "personal", label: "", apiKey: known.apiKey, athleteId: known.athleteId || "0" }]
+      : configuredIntervals(env);
+    if (accounts.length === 0) throw new Error("Intervals.icu API key is not set");
+    const showLabel = accounts.length > 1;
+    const activities: CachedActivity[] = [];
+    for (const account of accounts) {
+      const rows = await pullActivities(
+        showLabel ? account : { ...account, label: "" },
+        fetchImpl,
+      );
+      activities.push(...rows);
     }
+    activities.sort((a, b) => (a.start < b.start ? 1 : a.start > b.start ? -1 : 0));
     const feed: Feed = {
       source: "intervals",
       updatedAt: new Date().toISOString(),
       stale: false,
-      activities: sanitizeActivities(await res.json()),
+      activities: activities.slice(0, 30),
     };
     await env.FEED.put(FEED_KEY, JSON.stringify(feed));
     await env.FEED.delete(SYNC_KEY);
@@ -166,7 +206,7 @@ async function readGithub(env: Env): Promise<GithubSnapshot | null> {
   const raw = await env.FEED.get(GITHUB_KEY);
   if (!raw) return null;
   try {
-    return toPublicGithub(JSON.parse(raw));
+    return toPublicGithub(JSON.parse(raw), githubAccounts(env));
   } catch {
     return null;
   }
@@ -177,6 +217,10 @@ export async function refreshGithub(
   fetchImpl: FetchImpl = fetch,
   now = Date.now(),
 ): Promise<GithubSnapshot> {
+  if (githubAccounts(env).length === 0) {
+    await env.FEED.delete(GITHUB_KEY);
+    return { updatedAt: null, stale: false, accounts: [] };
+  }
   try {
     const snapshot: GithubSnapshot = {
       updatedAt: new Date(now).toISOString(),
@@ -199,6 +243,7 @@ export async function refreshGithub(
 }
 
 async function serveGithub(env: Env, fetchImpl: FetchImpl): Promise<GithubSnapshot | null> {
+  if (githubAccounts(env).length === 0) return null;
   const cached = await readGithub(env);
   if (cached) return cached;
   if (await recentFailure(env, GITHUB_SYNC_KEY)) return null;
@@ -219,7 +264,14 @@ async function serveFeed(env: Env, fetchImpl: FetchImpl): Promise<Feed & { githu
     }
   }
   if (await recentFailure(env, SYNC_KEY)) return emptyFeed();
-  if (!apiKeyFrom(env)) return emptyFeed();
+  let ready = false;
+  try {
+    ready = configuredIntervals(env).length > 0;
+  } catch (error) {
+    await noteSyncFailure(env, SYNC_KEY, error);
+    return emptyFeed();
+  }
+  if (!ready) return emptyFeed();
   try {
     const feed = await refreshFeed(env, fetchImpl);
     const github = await serveGithub(env, fetchImpl);

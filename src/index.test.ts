@@ -139,6 +139,29 @@ test("a refused activity pull stays empty and does not leak the key", async () =
   assert.equal((sync.message ?? "").includes("intervals*key"), false);
 });
 
+test("intervals accounts are an array and keys stay out of the cache", async () => {
+  const store = env("intervals*key");
+  store.INTERVALS_ACCOUNTS = JSON.stringify([
+    { id: "personal", label: "Personal" },
+    { id: "work", label: "Work" },
+  ]);
+  store.INTERVALS_API_KEY_WORK = "work-key-99";
+  let calls = 0;
+  const feed = await refreshFeed(store, async () => {
+    calls += 1;
+    const id = calls === 1 ? "i1" : "i2";
+    const start = calls === 1 ? "2026-10-01T06:00:00" : "2026-10-02T06:00:00";
+    return jsonResponse([{ ...rawActivity, id, name: id, start_date_local: start }]);
+  });
+  assert.equal(calls, 2);
+  assert.equal(feed.activities[0]?.name, "i2");
+  assert.equal(feed.activities[0]?.account, "Work");
+  assert.equal(feed.activities[1]?.account, "Personal");
+  const saved = (await store.FEED.get("feed")) ?? "";
+  assert.equal(saved.includes("intervals*key"), false);
+  assert.equal(saved.includes("work-key-99"), false);
+});
+
 test("cors allows the site and its preview and ignores other origins", async () => {
   const store = env();
   const fetchImpl = async () => jsonResponse({}, 500);

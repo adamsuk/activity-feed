@@ -1,12 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { accountFromCollection, cleanToken, loadGithubAccounts, toPublicGithub } from "./github.ts";
-import { handleRequest, refreshGithub } from "./index.ts";
+import { handleRequest, refreshFeed, refreshGithub } from "./index.ts";
 import { MemoryKv } from "./memory-kv.ts";
 import type { Env } from "./types.ts";
 
 const TOKEN = "ghp_personal_token_value_123456";
 const WORK_TOKEN = "ghp_work_token_value_123456789";
+const ACCOUNTS = JSON.stringify([
+  { id: "personal", label: "Personal", login: "adamsuk" },
+  { id: "work", label: "Work", login: "sra405" },
+]);
+const ALLOWED = [
+  { id: "personal", label: "Personal", login: "adamsuk" },
+  { id: "work", label: "Work", login: "sra405" },
+];
 
 function collection(overrides: Record<string, unknown> = {}) {
   return {
@@ -29,7 +37,7 @@ function viewerResponse(login: string, body = collection()) {
 }
 
 function env(extra: Partial<Env> = {}): Env {
-  return { FEED: new MemoryKv(), ...extra };
+  return { FEED: new MemoryKv(), GITHUB_ACCOUNTS: ACCOUNTS, ...extra };
 }
 
 test("a token has to look like a token", () => {
@@ -114,6 +122,33 @@ test("a token for the wrong account falls back to the public profile", async () 
   assert.equal(accounts[0]?.commits, 2);
 });
 
+test("an extra account is another entry, with its own secret", async () => {
+  const store = env({
+    GITHUB_ACCOUNTS: JSON.stringify([
+      ...ALLOWED,
+      { id: "side-project", label: "Lab", login: "octocat" },
+    ]),
+    GITHUB_TOKEN_PERSONAL: TOKEN,
+    GITHUB_TOKEN_WORK: WORK_TOKEN,
+    GITHUB_TOKEN_SIDE_PROJECT: "ghp_lab_token_value_123456789",
+  });
+  const names: string[] = [];
+  const accounts = await loadGithubAccounts(store, async (_input, init) => {
+    const auth = new Headers(init?.headers).get("Authorization");
+    names.push(auth ?? "public");
+    const login = auth?.endsWith("ghp_lab_token_value_123456789")
+      ? "octocat"
+      : auth?.endsWith(TOKEN)
+        ? "adamsuk"
+        : "sra405";
+    return viewerResponse(login, collection({ totalCommitContributions: login === "octocat" ? 3 : 1 }));
+  });
+  assert.deepEqual(accounts.map((account) => account.login), ["adamsuk", "sra405", "octocat"]);
+  assert.equal(accounts[2]?.label, "Lab");
+  assert.equal(accounts[2]?.commits, 3);
+  assert.equal(names[2], "Bearer ghp_lab_token_value_123456789");
+});
+
 test("the public feed adds github counts and still hides the token", async () => {
   const store = env({
     INTERVALS_API_KEY: "intervals*key",
@@ -150,7 +185,7 @@ test("a poisoned cache cannot add another account", () => {
       { login: "evil", contributions: 9, commits: 9, pullRequests: 0, reviews: 0, issues: 0 },
       { login: "sra405", contributions: 2, commits: 0, pullRequests: 0, reviews: 0, issues: 0 },
     ],
-  });
+  }, ALLOWED);
   assert.equal(snapshot?.accounts[0]?.label, "Personal");
   assert.equal(snapshot?.accounts.some((account) => account.login === "evil"), false);
 });

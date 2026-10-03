@@ -10,6 +10,8 @@ export type CachedActivity = {
   elevationM: number;
   location: string;
   url: string;
+  /** Set when the provider has more than one account. */
+  account?: string;
 };
 
 export type Feed = {
@@ -27,7 +29,7 @@ export type IntervalsAccount = {
 
 export type GithubAccount = {
   login: string;
-  label: "Personal" | "Work";
+  label: string;
   contributions: number;
   commits: number;
   pullRequests: number;
@@ -52,13 +54,17 @@ export interface Env {
   FEED: Kv;
   /** Comma-separated. Defaults to the public site. */
   ALLOWED_ORIGINS?: string;
-  /** Intervals.icu personal API key. Set as a Worker secret. Never commit it. */
+  /** Intervals.icu key for the personal account. Extra accounts use INTERVALS_API_KEY_<ID>. */
   INTERVALS_API_KEY?: string;
   /**
-   * GitHub tokens for adamsuk and sra405. Read-only is enough.
-   * A token sees that account's private commits and pull requests.
-   * The public feed still stores only the counts.
+   * JSON array of accounts. Logins live here, not in code.
+   * [{"id":"personal","label":"Personal","login":"..."}]
+   * The token for an id is the secret GITHUB_TOKEN_<ID>.
    */
-  GITHUB_TOKEN_PERSONAL?: string;
-  GITHUB_TOKEN_WORK?: string;
+  GITHUB_ACCOUNTS?: string;
+  /**
+   * Optional JSON array. When omitted, INTERVALS_API_KEY is the only account.
+   * [{"id":"personal","label":"Personal"},{"id":"work","label":"Work"}]
+   */
+  INTERVALS_ACCOUNTS?: string;
 }

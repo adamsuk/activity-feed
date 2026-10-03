@@ -1,12 +1,13 @@
+import { accountsFromEnv, binding, secretName } from "./accounts.ts";
+import type { Account } from "./accounts.ts";
 import type { Env, GithubAccount, GithubSnapshot } from "./types.ts";
 
 const GITHUB_GRAPHQL = "https://api.github.com/graphql";
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
-export const GITHUB_ACCOUNTS = [
-  { login: "adamsuk", label: "Personal", envKey: "GITHUB_TOKEN_PERSONAL" },
-  { login: "sra405", label: "Work", envKey: "GITHUB_TOKEN_WORK" },
-] as const;
+export function githubAccounts(env: Env): Account[] {
+  return accountsFromEnv(env.GITHUB_ACCOUNTS).filter((account) => account.login);
+}
 
 type FetchImpl = typeof fetch;
 
@@ -113,7 +114,7 @@ async function graphql(
 
 async function loadAccount(
   fetchImpl: FetchImpl,
-  account: (typeof GITHUB_ACCOUNTS)[number],
+  account: Account,
   token: string | null,
   range: { from: string; to: string },
 ): Promise<GithubAccount> {
@@ -137,37 +138,37 @@ export async function loadGithubAccounts(
 ): Promise<GithubAccount[]> {
   const range = weekRange(now);
   const accounts: GithubAccount[] = [];
-  for (const account of GITHUB_ACCOUNTS) {
-    const token = cleanToken(env[account.envKey]);
+  for (const account of githubAccounts(env)) {
+    const token = cleanToken(binding(env, secretName("GITHUB_TOKEN", account.id)));
     accounts.push(await loadAccount(fetchImpl, account, token, range));
   }
   return accounts;
 }
 
-const KNOWN = new Map(GITHUB_ACCOUNTS.map((account) => [account.login, account.label]));
-
-export function toPublicGithub(value: unknown): GithubSnapshot | null {
-  if (!value || typeof value !== "object") return null;
+export function toPublicGithub(value: unknown, allowed: Account[]): GithubSnapshot | null {
+  if (allowed.length === 0 || !value || typeof value !== "object") return null;
   const row = value as Record<string, unknown>;
   if (!Array.isArray(row.accounts)) return null;
-  const accounts: GithubAccount[] = [];
+  const byLogin = new Map<string, Record<string, unknown>>();
   for (const item of row.accounts) {
     if (!item || typeof item !== "object") continue;
     const account = item as Record<string, unknown>;
-    const login = typeof account.login === "string" ? account.login : "";
-    const label = KNOWN.get(login);
-    if (!label) continue;
+    if (typeof account.login === "string") byLogin.set(account.login, account);
+  }
+  const accounts: GithubAccount[] = [];
+  for (const account of allowed) {
+    const found = byLogin.get(account.login);
+    if (!found) return null;
     accounts.push({
-      login,
-      label,
-      contributions: count(account.contributions),
-      commits: count(account.commits),
-      pullRequests: count(account.pullRequests),
-      reviews: count(account.reviews),
-      issues: count(account.issues),
+      login: account.login,
+      label: account.label,
+      contributions: count(found.contributions),
+      commits: count(found.commits),
+      pullRequests: count(found.pullRequests),
+      reviews: count(found.reviews),
+      issues: count(found.issues),
     });
   }
-  if (accounts.length !== GITHUB_ACCOUNTS.length) return null;
   return {
     updatedAt: typeof row.updatedAt === "string" ? row.updatedAt : null,
     stale: row.stale === true,

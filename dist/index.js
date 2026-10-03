@@ -1,10 +1,47 @@
+// src/accounts.ts
+function cleanLabel(value, fallback) {
+  if (typeof value !== "string") return fallback;
+  const label = value.replace(/[\u0000-\u001F]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 40);
+  return label || fallback;
+}
+function accountsFromEnv(raw) {
+  if (!raw?.trim()) return [];
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  const seen = /* @__PURE__ */ new Set();
+  const accounts = [];
+  for (const item of parsed) {
+    if (!item || typeof item !== "object") continue;
+    const row = item;
+    const id = typeof row.id === "string" ? row.id.trim().toLowerCase() : "";
+    if (!/^[a-z][a-z0-9-]{0,30}$/.test(id) || seen.has(id)) continue;
+    const login = typeof row.login === "string" ? row.login.trim() : "";
+    if (login && !/^[A-Za-z0-9-]{1,39}$/.test(login)) continue;
+    seen.add(id);
+    accounts.push({ id, label: cleanLabel(row.label, id), login });
+    if (accounts.length === 10) break;
+  }
+  return accounts;
+}
+function secretName(prefix, id) {
+  return `${prefix}_${id.toUpperCase().replace(/-/g, "_")}`;
+}
+function binding(env, name) {
+  const value = env[name];
+  return typeof value === "string" ? value : void 0;
+}
+
 // src/github.ts
 var GITHUB_GRAPHQL = "https://api.github.com/graphql";
 var WEEK_MS = 7 * 24 * 60 * 60 * 1e3;
-var GITHUB_ACCOUNTS = [
-  { login: "adamsuk", label: "Personal", envKey: "GITHUB_TOKEN_PERSONAL" },
-  { login: "sra405", label: "Work", envKey: "GITHUB_TOKEN_WORK" }
-];
+function githubAccounts(env) {
+  return accountsFromEnv(env.GITHUB_ACCOUNTS).filter((account) => account.login);
+}
 var FIELDS = `
   contributionCalendar { totalContributions }
   totalCommitContributions
@@ -89,35 +126,36 @@ async function loadAccount(fetchImpl, account, token, range) {
 async function loadGithubAccounts(env, fetchImpl, now = Date.now()) {
   const range = weekRange(now);
   const accounts = [];
-  for (const account of GITHUB_ACCOUNTS) {
-    const token = cleanToken(env[account.envKey]);
+  for (const account of githubAccounts(env)) {
+    const token = cleanToken(binding(env, secretName("GITHUB_TOKEN", account.id)));
     accounts.push(await loadAccount(fetchImpl, account, token, range));
   }
   return accounts;
 }
-var KNOWN = new Map(GITHUB_ACCOUNTS.map((account) => [account.login, account.label]));
-function toPublicGithub(value) {
-  if (!value || typeof value !== "object") return null;
+function toPublicGithub(value, allowed) {
+  if (allowed.length === 0 || !value || typeof value !== "object") return null;
   const row = value;
   if (!Array.isArray(row.accounts)) return null;
-  const accounts = [];
+  const byLogin = /* @__PURE__ */ new Map();
   for (const item of row.accounts) {
     if (!item || typeof item !== "object") continue;
     const account = item;
-    const login = typeof account.login === "string" ? account.login : "";
-    const label = KNOWN.get(login);
-    if (!label) continue;
+    if (typeof account.login === "string") byLogin.set(account.login, account);
+  }
+  const accounts = [];
+  for (const account of allowed) {
+    const found = byLogin.get(account.login);
+    if (!found) return null;
     accounts.push({
-      login,
-      label,
-      contributions: count(account.contributions),
-      commits: count(account.commits),
-      pullRequests: count(account.pullRequests),
-      reviews: count(account.reviews),
-      issues: count(account.issues)
+      login: account.login,
+      label: account.label,
+      contributions: count(found.contributions),
+      commits: count(found.commits),
+      pullRequests: count(found.pullRequests),
+      reviews: count(found.reviews),
+      issues: count(found.issues)
     });
   }
-  if (accounts.length !== GITHUB_ACCOUNTS.length) return null;
   return {
     updatedAt: typeof row.updatedAt === "string" ? row.updatedAt : null,
     stale: row.stale === true,
@@ -207,6 +245,7 @@ function publicActivity(raw) {
   const url = cleanText(row.url, 80);
   if (distanceM === null || movingS === null || elevationM === null || !start) return null;
   if (url !== `https://intervals.icu/activities/${id}`) return null;
+  const account = cleanText(row.account, 40);
   return {
     id,
     name: cleanText(row.name, 80) || "Activity",
@@ -216,7 +255,8 @@ function publicActivity(raw) {
     movingS: Math.round(movingS),
     elevationM: Math.round(elevationM),
     location: cleanText(row.location, 80),
-    url
+    url,
+    ...account ? { account } : {}
   };
 }
 function toPublicFeed(value) {
@@ -294,8 +334,8 @@ async function readFeed(env) {
     return emptyFeed();
   }
 }
-function apiKeyFrom(env) {
-  let apiKey = (env.INTERVALS_API_KEY || "").trim();
+function cleanApiKey(value) {
+  let apiKey = (value || "").trim();
   if (apiKey.startsWith('"') && apiKey.endsWith('"') || apiKey.startsWith("'") && apiKey.endsWith("'")) {
     apiKey = apiKey.slice(1, -1).trim();
   }
@@ -303,6 +343,21 @@ function apiKeyFrom(env) {
   if (apiKey.length < 8 || apiKey.length > 200) return null;
   if (/[^\x21-\x7e]/.test(apiKey)) return null;
   return apiKey;
+}
+function configuredIntervals(env) {
+  const listed = accountsFromEnv(env.INTERVALS_ACCOUNTS);
+  if (listed.length === 0) {
+    const apiKey = cleanApiKey(env.INTERVALS_API_KEY);
+    return apiKey ? [{ id: "personal", label: "", apiKey, athleteId: "0" }] : [];
+  }
+  const resolved = [];
+  for (const account of listed) {
+    const named = cleanApiKey(binding(env, secretName("INTERVALS_API_KEY", account.id)));
+    const apiKey = named || (account.id === "personal" ? cleanApiKey(env.INTERVALS_API_KEY) : null);
+    if (!apiKey) throw new Error(`Intervals key is not set for ${account.id}`);
+    resolved.push({ id: account.id, label: account.label, apiKey, athleteId: "0" });
+  }
+  return resolved;
 }
 function basic(apiKey) {
   return `Basic ${btoa(`API_KEY:${apiKey}`)}`;
@@ -334,25 +389,36 @@ async function recentFailure(env, key) {
     return false;
   }
 }
-async function resolveAccount(env) {
-  const apiKey = apiKeyFrom(env);
-  if (!apiKey) throw new Error("Intervals.icu API key is not set");
-  return { apiKey, athleteId: "0" };
+async function pullActivities(account, fetchImpl) {
+  const url = `https://intervals.icu/api/v1/athlete/${account.athleteId}/activities?oldest=${day(-120)}&newest=${day(1)}`;
+  const res = await fetchImpl(url, { headers: { Authorization: basic(account.apiKey) } });
+  if (!res.ok) {
+    const detail = await failureDetail(res);
+    throw new Error(detail ? `activities failed (${res.status}) ${detail}` : `activities failed (${res.status})`);
+  }
+  const activities = sanitizeActivities(await res.json());
+  if (!account.label) return activities;
+  return activities.map((activity) => ({ ...activity, account: account.label }));
 }
 async function refreshFeed(env, fetchImpl = fetch, known) {
   try {
-    const account = known?.apiKey ? known : await resolveAccount(env);
-    const url = `https://intervals.icu/api/v1/athlete/${account.athleteId}/activities?oldest=${day(-120)}&newest=${day(1)}`;
-    const res = await fetchImpl(url, { headers: { Authorization: basic(account.apiKey) } });
-    if (!res.ok) {
-      const detail = await failureDetail(res);
-      throw new Error(detail ? `activities failed (${res.status}) ${detail}` : `activities failed (${res.status})`);
+    const accounts = known?.apiKey ? [{ id: "personal", label: "", apiKey: known.apiKey, athleteId: known.athleteId || "0" }] : configuredIntervals(env);
+    if (accounts.length === 0) throw new Error("Intervals.icu API key is not set");
+    const showLabel = accounts.length > 1;
+    const activities = [];
+    for (const account of accounts) {
+      const rows = await pullActivities(
+        showLabel ? account : { ...account, label: "" },
+        fetchImpl
+      );
+      activities.push(...rows);
     }
+    activities.sort((a, b) => a.start < b.start ? 1 : a.start > b.start ? -1 : 0);
     const feed = {
       source: "intervals",
       updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
       stale: false,
-      activities: sanitizeActivities(await res.json())
+      activities: activities.slice(0, 30)
     };
     await env.FEED.put(FEED_KEY, JSON.stringify(feed));
     await env.FEED.delete(SYNC_KEY);
@@ -374,12 +440,16 @@ async function readGithub(env) {
   const raw = await env.FEED.get(GITHUB_KEY);
   if (!raw) return null;
   try {
-    return toPublicGithub(JSON.parse(raw));
+    return toPublicGithub(JSON.parse(raw), githubAccounts(env));
   } catch {
     return null;
   }
 }
 async function refreshGithub(env, fetchImpl = fetch, now = Date.now()) {
+  if (githubAccounts(env).length === 0) {
+    await env.FEED.delete(GITHUB_KEY);
+    return { updatedAt: null, stale: false, accounts: [] };
+  }
   try {
     const snapshot = {
       updatedAt: new Date(now).toISOString(),
@@ -401,6 +471,7 @@ async function refreshGithub(env, fetchImpl = fetch, now = Date.now()) {
   }
 }
 async function serveGithub(env, fetchImpl) {
+  if (githubAccounts(env).length === 0) return null;
   const cached = await readGithub(env);
   if (cached) return cached;
   if (await recentFailure(env, GITHUB_SYNC_KEY)) return null;
@@ -420,7 +491,14 @@ async function serveFeed(env, fetchImpl) {
     }
   }
   if (await recentFailure(env, SYNC_KEY)) return emptyFeed();
-  if (!apiKeyFrom(env)) return emptyFeed();
+  let ready = false;
+  try {
+    ready = configuredIntervals(env).length > 0;
+  } catch (error) {
+    await noteSyncFailure(env, SYNC_KEY, error);
+    return emptyFeed();
+  }
+  if (!ready) return emptyFeed();
   try {
     const feed = await refreshFeed(env, fetchImpl);
     const github = await serveGithub(env, fetchImpl);
