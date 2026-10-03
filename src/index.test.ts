@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { MemoryKv } from "./memory-kv.ts";
-import { handleRequest, refreshFeed } from "./index.ts";
-import type { Env } from "./types.ts";
+import { handleRequest, refresh } from "./index.ts";
+import { intervalsProvider } from "./intervals.ts";
+import type { Env, Feed } from "./types.ts";
 
 const rawActivity = {
   id: "i99",
@@ -24,19 +25,19 @@ function env(apiKey?: string): Env {
   };
 }
 
-const known = { apiKey: "intervals-key", athleteId: "i2049151", athleteName: "Scott Adams" };
+const knownKey = "intervals-key";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status });
 }
 
 test("public feed is empty and does not call Intervals.icu", async () => {
-  let called = 0;
+  const urls: string[] = [];
   const response = await handleRequest(
     new Request("https://activities.sradams.co.uk/feed.json"),
     env(),
-    async () => {
-      called += 1;
+    async (input) => {
+      urls.push(String(input));
       return jsonResponse({});
     },
   );
@@ -48,14 +49,14 @@ test("public feed is empty and does not call Intervals.icu", async () => {
     stale: false,
     activities: [],
   });
-  assert.equal(called, 0);
+  assert.equal(urls.length, 0);
 });
 
 test("sanitize keeps a homepage row and drops gps and heart rate", async () => {
-  const store = env();
-  const feed = await refreshFeed(store, async (input) => {
+  const store = env(knownKey);
+  const feed = await refresh(store, intervalsProvider, async (input) => {
     const url = String(input);
-    if (url.includes("/athlete/i2049151/activities")) {
+    if (url.includes("/athlete/0/activities")) {
       return jsonResponse([
         rawActivity,
         { ...rawActivity, id: "i100", private: true, name: "Hidden" },
@@ -63,7 +64,7 @@ test("sanitize keeps a homepage row and drops gps and heart rate", async () => {
       ]);
     }
     throw new Error(`unexpected ${url}`);
-  }, known);
+  }) as Feed;
 
   assert.equal(feed.activities.length, 2);
   assert.equal(feed.activities[0]?.sport, "Ride");
@@ -78,9 +79,9 @@ test("sanitize keeps a homepage row and drops gps and heart rate", async () => {
 });
 
 test("a failed refresh keeps the last good cache and marks it stale", async () => {
-  const store = env();
+  const store = env(knownKey);
   await store.FEED.put(
-    "feed",
+    "intervals",
     JSON.stringify({
       source: "intervals",
       updatedAt: "2026-10-01T06:00:00Z",
@@ -100,7 +101,7 @@ test("a failed refresh keeps the last good cache and marks it stale", async () =
       ],
     }),
   );
-  const feed = await refreshFeed(store, async () => jsonResponse({ message: "no" }, 500), known);
+  const feed = await refresh(store, intervalsProvider, async () => jsonResponse({ message: "no" }, 500)) as Feed;
   assert.equal(feed.stale, true);
   assert.equal(feed.activities[0]?.name, "Kept");
 });
@@ -120,9 +121,8 @@ test("an env key fills the feed and is not stored", async () => {
   const body = (await response.json()) as { source: string; activities: unknown[] };
   assert.equal(body.source, "intervals");
   assert.equal(body.activities.length, 1);
-  const saved = (await store.FEED.get("feed")) ?? "";
+  const saved = (await store.FEED.get("intervals")) ?? "";
   assert.equal(saved.includes("intervals*key"), false);
-  assert.equal(await store.FEED.get("intervals"), null);
 });
 
 test("a refused activity pull stays empty and does not leak the key", async () => {
@@ -134,25 +134,59 @@ test("a refused activity pull stays empty and does not leak the key", async () =
   );
   const body = (await response.json()) as { source: string };
   assert.equal(body.source, "empty");
-  const sync = JSON.parse((await store.FEED.get("sync")) ?? "{}") as { message?: string };
+  const sync = JSON.parse((await store.FEED.get("intervals:sync")) ?? "{}") as { message?: string };
   assert.match(sync.message ?? "", /401/);
   assert.equal((sync.message ?? "").includes("intervals*key"), false);
 });
 
-test("cors allows the site and ignores other origins", async () => {
+test("intervals accounts are an array and keys stay out of the cache", async () => {
+  const store = env("intervals*key");
+  store.INTERVALS_ACCOUNTS = JSON.stringify([
+    { id: "personal", label: "Personal" },
+    { id: "work", label: "Work" },
+  ]);
+  store.INTERVALS_API_KEY_WORK = "work-key-99";
+  let calls = 0;
+  const feed = await refresh(store, intervalsProvider, async () => {
+    calls += 1;
+    const id = calls === 1 ? "i1" : "i2";
+    const start = calls === 1 ? "2026-10-01T06:00:00" : "2026-10-02T06:00:00";
+    return jsonResponse([{ ...rawActivity, id, name: id, start_date_local: start }]);
+  });
+  assert.equal(calls, 2);
+  assert.equal(feed.activities[0]?.name, "i2");
+  assert.equal(feed.activities[0]?.account, "Work");
+  assert.equal(feed.activities[1]?.account, "Personal");
+  const saved = (await store.FEED.get("intervals")) ?? "";
+  assert.equal(saved.includes("intervals*key"), false);
+  assert.equal(saved.includes("work-key-99"), false);
+});
+
+test("cors allows the site and its preview and ignores other origins", async () => {
   const store = env();
+  const fetchImpl = async () => jsonResponse({}, 500);
   const allowed = await handleRequest(
     new Request("https://activities.sradams.co.uk/feed.json", {
       headers: { Origin: "https://sradams.co.uk" },
     }),
     store,
+    fetchImpl,
   );
   assert.equal(allowed.headers.get("Access-Control-Allow-Origin"), "https://sradams.co.uk");
+  const preview = await handleRequest(
+    new Request("https://activities.sradams.co.uk/feed.json", {
+      headers: { Origin: "https://abc123.sradams-co-uk-content.pages.dev" },
+    }),
+    store,
+    fetchImpl,
+  );
+  assert.equal(preview.headers.get("Access-Control-Allow-Origin"), "https://abc123.sradams-co-uk-content.pages.dev");
   const blocked = await handleRequest(
     new Request("https://activities.sradams.co.uk/feed.json", {
       headers: { Origin: "https://evil.example" },
     }),
     store,
+    fetchImpl,
   );
   assert.equal(blocked.headers.get("Access-Control-Allow-Origin"), null);
 });

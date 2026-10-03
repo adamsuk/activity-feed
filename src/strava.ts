@@ -102,6 +102,7 @@ function publicActivity(raw: unknown): CachedActivity | null {
   const url = cleanText(row.url, 80);
   if (distanceM === null || movingS === null || elevationM === null || !start) return null;
   if (url !== `https://intervals.icu/activities/${id}`) return null;
+  const account = cleanText(row.account, 40);
   return {
     id,
     name: cleanText(row.name, 80) || "Activity",
@@ -112,6 +113,7 @@ function publicActivity(raw: unknown): CachedActivity | null {
     elevationM: Math.round(elevationM),
     location: cleanText(row.location, 80),
     url,
+    ...(account ? { account } : {}),
   };
 }
 

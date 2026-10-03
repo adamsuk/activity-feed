@@ -1,12 +1,12 @@
-import { emptyFeed, sanitizeActivities, toPublicFeed } from "./strava.ts";
-import type { Env, Feed, IntervalsAccount } from "./types.ts";
+import type { FetchImpl, Provider } from "./provider.ts";
+import { providers } from "./providers.ts";
+import { emptyFeed } from "./strava.ts";
+import type { Env } from "./types.ts";
 
-const FEED_KEY = "feed";
-const SYNC_KEY = "sync";
 const SYNC_BACKOFF_MS = 5 * 60 * 1000;
 const DEFAULT_ORIGINS = "https://sradams.co.uk,https://www.sradams.co.uk";
-
-type FetchImpl = typeof fetch;
+const PAGES_HOST = "sradams-co-uk-content.pages.dev";
+const ROOT_FIELDS = new Set(["source", "updatedAt", "stale", "activities"]);
 
 function origins(env: Env): string[] {
   return (env.ALLOWED_ORIGINS || DEFAULT_ORIGINS)
@@ -15,10 +15,22 @@ function origins(env: Env): string[] {
     .filter(Boolean);
 }
 
+function originAllowed(origin: string, env: Env): boolean {
+  if (origins(env).includes(origin)) return true;
+  try {
+    const url = new URL(origin);
+    return url.protocol === "https:" && (
+      url.hostname === PAGES_HOST || url.hostname.endsWith(`.${PAGES_HOST}`)
+    );
+  } catch {
+    return false;
+  }
+}
+
 function cors(request: Request, env: Env): Headers {
   const headers = new Headers();
   const origin = request.headers.get("Origin");
-  if (origin && origins(env).includes(origin)) {
+  if (origin && originAllowed(origin, env)) {
     headers.set("Access-Control-Allow-Origin", origin);
     headers.set("Vary", "Origin");
     headers.set("Access-Control-Allow-Methods", "GET, OPTIONS");
@@ -31,8 +43,9 @@ function json(body: unknown, extra?: Headers, status = 200): Response {
   const headers = extra ?? new Headers();
   headers.set("Content-Type", "application/json; charset=utf-8");
   if (!headers.has("Cache-Control")) {
-    const empty = typeof body === "object" && body !== null && (body as { source?: string }).source === "empty";
-    headers.set("Cache-Control", empty ? "no-store" : "public, max-age=300");
+    const record = body as Record<string, unknown>;
+    const onlyRoot = Object.keys(record).every((key) => ROOT_FIELDS.has(key));
+    headers.set("Cache-Control", record.source === "empty" && onlyRoot ? "no-store" : "public, max-age=300");
   }
   return new Response(JSON.stringify(body), { status, headers });
 }
@@ -45,55 +58,17 @@ function text(body: string, status: number, extra?: Headers): Response {
   return new Response(body, { status, headers });
 }
 
-async function readFeed(env: Env): Promise<Feed> {
-  const raw = await env.FEED.get(FEED_KEY);
-  if (!raw) return emptyFeed();
-  try {
-    return toPublicFeed(JSON.parse(raw));
-  } catch {
-    return emptyFeed();
-  }
+function syncKey(provider: Provider): string {
+  return `${provider.id}:sync`;
 }
 
-function apiKeyFrom(env: Env): string | null {
-  let apiKey = (env.INTERVALS_API_KEY || "").trim();
-  if (
-    (apiKey.startsWith('"') && apiKey.endsWith('"')) ||
-    (apiKey.startsWith("'") && apiKey.endsWith("'"))
-  ) {
-    apiKey = apiKey.slice(1, -1).trim();
-  }
-  if (/^API_KEY:/i.test(apiKey)) apiKey = apiKey.slice("API_KEY:".length).trim();
-  if (apiKey.length < 8 || apiKey.length > 200) return null;
-  if (/[^\x21-\x7e]/.test(apiKey)) return null;
-  return apiKey;
-}
-
-function basic(apiKey: string): string {
-  return `Basic ${btoa(`API_KEY:${apiKey}`)}`;
-}
-
-function day(offset: number): string {
-  return new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
-}
-
-async function failureDetail(res: Response): Promise<string> {
-  try {
-    const body = (await res.json()) as Record<string, unknown>;
-    const message = typeof body.message === "string" ? body.message.slice(0, 80) : "";
-    return message;
-  } catch {
-    return "";
-  }
-}
-
-async function noteSyncFailure(env: Env, error: unknown): Promise<void> {
+async function noteSyncFailure(env: Env, key: string, error: unknown): Promise<void> {
   const message = error instanceof Error ? error.message.slice(0, 180) : "refresh failed";
-  await env.FEED.put(SYNC_KEY, JSON.stringify({ at: new Date().toISOString(), message }));
+  await env.FEED.put(key, JSON.stringify({ at: new Date().toISOString(), message }));
 }
 
-async function recentSyncFailure(env: Env): Promise<boolean> {
-  const raw = await env.FEED.get(SYNC_KEY);
+async function recentFailure(env: Env, key: string): Promise<boolean> {
+  const raw = await env.FEED.get(key);
   if (!raw) return false;
   try {
     const parsed = JSON.parse(raw) as { at?: string };
@@ -104,64 +79,72 @@ async function recentSyncFailure(env: Env): Promise<boolean> {
   }
 }
 
-async function resolveAccount(env: Env): Promise<IntervalsAccount> {
-  const apiKey = apiKeyFrom(env);
-  if (!apiKey) throw new Error("Intervals.icu API key is not set");
-  return { apiKey, athleteId: "0" };
-}
-
-export async function refreshFeed(
-  env: Env,
-  fetchImpl: FetchImpl = fetch,
-  known?: IntervalsAccount | null,
-): Promise<Feed> {
+async function readSection(env: Env, provider: Provider): Promise<Record<string, unknown> | null> {
+  const raw = await env.FEED.get(provider.id);
+  if (!raw) return null;
   try {
-    const account = known?.apiKey ? known : await resolveAccount(env);
-    const url = `https://intervals.icu/api/v1/athlete/${account.athleteId}/activities?oldest=${day(-120)}&newest=${day(1)}`;
-    const res = await fetchImpl(url, { headers: { Authorization: basic(account.apiKey) } });
-    if (!res.ok) {
-      const detail = await failureDetail(res);
-      throw new Error(detail ? `activities failed (${res.status}) ${detail}` : `activities failed (${res.status})`);
-    }
-    const feed: Feed = {
-      source: "intervals",
-      updatedAt: new Date().toISOString(),
-      stale: false,
-      activities: sanitizeActivities(await res.json()),
-    };
-    await env.FEED.put(FEED_KEY, JSON.stringify(feed));
-    await env.FEED.delete(SYNC_KEY);
-    await env.FEED.delete("token");
-    await env.FEED.delete("intervals");
-    return feed;
-  } catch (error) {
-    await noteSyncFailure(env, error);
-    const existing = await readFeed(env);
-    if (existing.source === "intervals") {
-      const stale: Feed = { ...existing, stale: true };
-      await env.FEED.put(FEED_KEY, JSON.stringify(stale));
-      return stale;
-    }
-    throw error;
-  }
-}
-
-async function serveFeed(env: Env, fetchImpl: FetchImpl): Promise<Feed> {
-  const raw = await env.FEED.get(FEED_KEY);
-  if (raw) {
-    try {
-      return toPublicFeed(JSON.parse(raw));
-    } catch {
-      return emptyFeed();
-    }
-  }
-  if (await recentSyncFailure(env)) return emptyFeed();
-  if (!apiKeyFrom(env)) return emptyFeed();
-  try {
-    return await refreshFeed(env, fetchImpl);
+    return provider.publish(env, JSON.parse(raw));
   } catch {
-    return emptyFeed();
+    return null;
   }
+}
+
+export async function refresh(
+  env: Env,
+  provider: Provider,
+  fetchImpl: FetchImpl = fetch,
+  now = Date.now(),
+): Promise<Record<string, unknown> | null> {
+  if (!provider.enabled(env)) {
+    await env.FEED.delete(provider.id);
+    return null;
+  }
+  try {
+    const section = await provider.load(env, fetchImpl, now);
+    await env.FEED.put(provider.id, JSON.stringify(section));
+    await env.FEED.delete(syncKey(provider));
+    return section;
+  } catch (error) {
+    await noteSyncFailure(env, syncKey(provider), error);
+    const existing = await readSection(env, provider);
+    if (!existing) throw error;
+    const stale = { ...existing, stale: true };
+    await env.FEED.put(provider.id, JSON.stringify(stale));
+    return stale;
+  }
+}
+
+async function serveProvider(
+  env: Env,
+  provider: Provider,
+  fetchImpl: FetchImpl,
+): Promise<Record<string, unknown> | null> {
+  if (!provider.enabled(env)) return null;
+  const cached = await readSection(env, provider);
+  if (cached) return cached;
+  if (await recentFailure(env, syncKey(provider))) return null;
+  try {
+    return await refresh(env, provider, fetchImpl);
+  } catch {
+    return null;
+  }
+}
+
+async function serveFeed(env: Env, fetchImpl: FetchImpl): Promise<Record<string, unknown>> {
+  const body: Record<string, unknown> = {};
+  let rooted = false;
+  for (const provider of providers) {
+    const section = await serveProvider(env, provider, fetchImpl);
+    if (!section) continue;
+    if (provider.root) {
+      Object.assign(body, section);
+      rooted = true;
+    } else {
+      body[provider.id] = section;
+    }
+  }
+  if (!rooted) Object.assign(body, emptyFeed());
+  return body;
 }
 
 export async function handleRequest(
@@ -192,10 +175,11 @@ export default {
     return handleRequest(request, env);
   },
   scheduled(_event: unknown, env: Env, ctx: { waitUntil(promise: Promise<unknown>): void }): void {
+    const enabled = providers.filter((provider) => provider.enabled(env));
     ctx.waitUntil(
-      refreshFeed(env).catch((error: unknown) => {
+      Promise.all(enabled.map((provider) => refresh(env, provider).catch((error: unknown) => {
         console.error(error);
-      }),
+      }))),
     );
   },
 };

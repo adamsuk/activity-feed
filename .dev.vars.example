@@ -1,2 +1,9 @@
 # Copy to .dev.vars for `wrangler dev`. Do not commit .dev.vars.
 INTERVALS_API_KEY=
+GITHUB_ACCOUNTS=[{"id":"personal","label":"Personal","login":""},{"id":"work","label":"Work","login":""}]
+GITHUB_TOKEN_PERSONAL=
+GITHUB_TOKEN_WORK=
+# Further accounts: add an object to GITHUB_ACCOUNTS and a matching secret.
+# GITHUB_TOKEN_LAB=
+# INTERVALS_ACCOUNTS=[{"id":"personal","label":"Personal"},{"id":"work","label":"Work"}]
+# INTERVALS_API_KEY_WORK=
