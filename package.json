@@ -1,5 +1,5 @@
 {
-  "name": "strava-feed",
+  "name": "activity-feed",
   "private": true,
   "type": "module",
   "scripts": {
