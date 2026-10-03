@@ -11,8 +11,9 @@ id = "f0a57d469c054cfcaeb542423ca0ef68"
 [triggers]
 crons = ["*/30 * * * *"]
 
-# The Intervals.icu API key is a Worker secret named INTERVALS_API_KEY.
-# Set it in the dashboard or with: npx wrangler secret put INTERVALS_API_KEY
-# Do not commit it.
+# INTERVALS_API_KEY reads Intervals.icu.
+# GITHUB_TOKEN_PERSONAL and GITHUB_TOKEN_WORK read each GitHub account.
+# Set them with: npx wrangler secret put <NAME>
+# Do not commit them.
 [vars]
 ALLOWED_ORIGINS = "https://sradams.co.uk,https://www.sradams.co.uk"

@@ -1,2 +1,4 @@
 # Copy to .dev.vars for `wrangler dev`. Do not commit .dev.vars.
 INTERVALS_API_KEY=
+GITHUB_TOKEN_PERSONAL=
+GITHUB_TOKEN_WORK=

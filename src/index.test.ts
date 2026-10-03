@@ -31,12 +31,12 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 test("public feed is empty and does not call Intervals.icu", async () => {
-  let called = 0;
+  const urls: string[] = [];
   const response = await handleRequest(
     new Request("https://activities.sradams.co.uk/feed.json"),
     env(),
-    async () => {
-      called += 1;
+    async (input) => {
+      urls.push(String(input));
       return jsonResponse({});
     },
   );
@@ -48,7 +48,7 @@ test("public feed is empty and does not call Intervals.icu", async () => {
     stale: false,
     activities: [],
   });
-  assert.equal(called, 0);
+  assert.equal(urls.some((url) => url.includes("intervals.icu")), false);
 });
 
 test("sanitize keeps a homepage row and drops gps and heart rate", async () => {
@@ -139,20 +139,31 @@ test("a refused activity pull stays empty and does not leak the key", async () =
   assert.equal((sync.message ?? "").includes("intervals*key"), false);
 });
 
-test("cors allows the site and ignores other origins", async () => {
+test("cors allows the site and its preview and ignores other origins", async () => {
   const store = env();
+  const fetchImpl = async () => jsonResponse({}, 500);
   const allowed = await handleRequest(
     new Request("https://activities.sradams.co.uk/feed.json", {
       headers: { Origin: "https://sradams.co.uk" },
     }),
     store,
+    fetchImpl,
   );
   assert.equal(allowed.headers.get("Access-Control-Allow-Origin"), "https://sradams.co.uk");
+  const preview = await handleRequest(
+    new Request("https://activities.sradams.co.uk/feed.json", {
+      headers: { Origin: "https://abc123.sradams-co-uk-content.pages.dev" },
+    }),
+    store,
+    fetchImpl,
+  );
+  assert.equal(preview.headers.get("Access-Control-Allow-Origin"), "https://abc123.sradams-co-uk-content.pages.dev");
   const blocked = await handleRequest(
     new Request("https://activities.sradams.co.uk/feed.json", {
       headers: { Origin: "https://evil.example" },
     }),
     store,
+    fetchImpl,
   );
   assert.equal(blocked.headers.get("Access-Control-Allow-Origin"), null);
 });

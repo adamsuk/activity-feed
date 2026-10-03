@@ -25,6 +25,22 @@ export type IntervalsAccount = {
   athleteName?: string;
 };
 
+export type GithubAccount = {
+  login: string;
+  label: "Personal" | "Work";
+  contributions: number;
+  commits: number;
+  pullRequests: number;
+  reviews: number;
+  issues: number;
+};
+
+export type GithubSnapshot = {
+  updatedAt: string | null;
+  stale: boolean;
+  accounts: GithubAccount[];
+};
+
 /** Minimal KV surface so the worker runs on Cloudflare and in tests. */
 export interface Kv {
   get(key: string): Promise<string | null>;
@@ -38,4 +54,11 @@ export interface Env {
   ALLOWED_ORIGINS?: string;
   /** Intervals.icu personal API key. Set as a Worker secret. Never commit it. */
   INTERVALS_API_KEY?: string;
+  /**
+   * GitHub tokens for adamsuk and sra405. Read-only is enough.
+   * A token sees that account's private commits and pull requests.
+   * The public feed still stores only the counts.
+   */
+  GITHUB_TOKEN_PERSONAL?: string;
+  GITHUB_TOKEN_WORK?: string;
 }
