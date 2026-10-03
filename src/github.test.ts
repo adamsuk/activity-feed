@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { accountFromCollection, cleanToken, loadGithubAccounts, toPublicGithub } from "./github.ts";
-import { handleRequest, refreshFeed, refreshGithub } from "./index.ts";
+import { accountFromCollection, cleanToken, githubProvider, loadGithubAccounts, toPublicGithub } from "./github.ts";
+import { handleRequest, refresh } from "./index.ts";
 import { MemoryKv } from "./memory-kv.ts";
 import type { Env } from "./types.ts";
 
@@ -40,6 +40,16 @@ function env(extra: Partial<Env> = {}): Env {
   return { FEED: new MemoryKv(), GITHUB_ACCOUNTS: ACCOUNTS, ...extra };
 }
 
+test("github is not called when no accounts are configured", async () => {
+  let called = 0;
+  const result = await refresh({ FEED: new MemoryKv() }, githubProvider, async () => {
+    called += 1;
+    return new Response("no");
+  });
+  assert.equal(result, null);
+  assert.equal(called, 0);
+});
+
 test("a token has to look like a token", () => {
   assert.equal(cleanToken("Bearer ghp_personal_token_value_123456"), TOKEN);
   assert.equal(cleanToken("short"), null);
@@ -66,7 +76,7 @@ test("counts stay numeric and ignore repository names", () => {
 test("each token is sent only for its own account and is not stored", async () => {
   const store = env({ GITHUB_TOKEN_PERSONAL: TOKEN, GITHUB_TOKEN_WORK: `Bearer ${WORK_TOKEN}` });
   const calls: { auth: string | null; query: string }[] = [];
-  const snapshot = await refreshGithub(store, async (_input, init) => {
+  const snapshot = await refresh(store, githubProvider, async (_input, init) => {
     const headers = new Headers(init?.headers);
     const body = JSON.parse(String(init?.body)) as { query: string };
     calls.push({ auth: headers.get("Authorization"), query: body.query });

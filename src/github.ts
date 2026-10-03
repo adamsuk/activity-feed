@@ -1,5 +1,6 @@
 import { accountsFromEnv, binding, secretName } from "./accounts.ts";
 import type { Account } from "./accounts.ts";
+import type { Provider } from "./provider.ts";
 import type { Env, GithubAccount, GithubSnapshot } from "./types.ts";
 
 const GITHUB_GRAPHQL = "https://api.github.com/graphql";
@@ -175,3 +176,20 @@ export function toPublicGithub(value: unknown, allowed: Account[]): GithubSnapsh
     accounts,
   };
 }
+
+export const githubProvider: Provider = {
+  id: "github",
+  enabled(env) {
+    return githubAccounts(env).length > 0;
+  },
+  async load(env, fetchImpl, now = Date.now()) {
+    return {
+      updatedAt: new Date(now).toISOString(),
+      stale: false,
+      accounts: await loadGithubAccounts(env, fetchImpl, now),
+    };
+  },
+  publish(env, value) {
+    return toPublicGithub(value, githubAccounts(env));
+  },
+};

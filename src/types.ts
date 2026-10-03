@@ -21,12 +21,6 @@ export type Feed = {
   activities: CachedActivity[];
 };
 
-export type IntervalsAccount = {
-  apiKey: string;
-  athleteId: string;
-  athleteName?: string;
-};
-
 export type GithubAccount = {
   login: string;
   label: string;
