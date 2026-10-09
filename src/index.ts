@@ -103,7 +103,7 @@ export async function refresh(
     const section = await provider.load(env, fetchImpl, now);
     await env.FEED.put(provider.id, JSON.stringify(section));
     await env.FEED.delete(syncKey(provider));
-    return section;
+    return provider.publish(env, section) ?? section;
   } catch (error) {
     await noteSyncFailure(env, syncKey(provider), error);
     const existing = await readSection(env, provider);

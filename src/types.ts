@@ -61,4 +61,9 @@ export interface Env {
    * [{"id":"personal","label":"Personal"},{"id":"work","label":"Work"}]
    */
   INTERVALS_ACCOUNTS?: string;
+  /**
+   * JSON array. The id is the Goodreads numeric user id, and the shelves must be public.
+   * [{"id":"personal","label":"Personal","userId":"12345678"}]
+   */
+  GOODREADS_ACCOUNTS?: string;
 }
