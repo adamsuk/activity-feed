@@ -23,3 +23,4 @@ crons = ["*/30 * * * *"]
 [vars]
 ALLOWED_ORIGINS = "https://sradams.co.uk,https://www.sradams.co.uk,https://sradams-co-uk-content.pages.dev,https://feat-last-seven-days.sradams-co-uk-content.pages.dev,https://feat-github-week.sradams-co-uk-content.pages.dev,https://a02db8d9.sradams-co-uk-content.pages.dev,https://a88ddf1a.sradams-co-uk-content.pages.dev"
 GITHUB_ACCOUNTS = "[   {\"id\":\"personal\",\"label\":\"Personal\",\"login\":\"adamsuk\"},   {\"id\":\"work\",\"label\":\"Work\",\"login\":\"sra405\"} ]"
+GOODREADS_ACCOUNTS = "[{\"id\":\"personal\",\"label\":\"Personal\",\"userId\":\"176915360\"}]"
