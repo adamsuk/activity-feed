@@ -85,7 +85,8 @@ type Parsed = GoodreadsBook & { bookId: string };
 
 export function booksFromRss(xml: string, shelf: "read" | "currently-reading", now: number): Parsed[] {
   const since = now - WEEK_MS;
-  const books: Parsed[] = [];
+  const reading: Parsed[] = [];
+  const finished: Array<Parsed & { readAt: number }> = [];
   for (const item of xml.split("<item>").slice(1)) {
     const body = item.split("</item>")[0];
     const title = clean(tag(body, "title"), 180);
@@ -93,23 +94,31 @@ export function booksFromRss(xml: string, shelf: "read" | "currently-reading", n
     if (!title || !bookUrl(bookId)) continue;
     const readAt = Date.parse(tag(body, "user_read_at"));
     const addedAt = Date.parse(tag(body, "user_date_added"));
-    const finished = shelf === "read" && Number.isFinite(readAt) && readAt >= since;
-    const reading = shelf === "currently-reading";
-    if (!finished && !reading) continue;
-    const when = finished ? readAt : (Number.isFinite(addedAt) ? addedAt : Number.NaN);
     const rating = Number(tag(body, "user_rating"));
-    books.push({
+    const book: Parsed = {
       bookId,
       title,
       author: clean(tag(body, "author_name"), 120),
-      status: finished ? "finished" : "reading",
-      at: Number.isFinite(when) ? new Date(when).toISOString() : null,
+      status: shelf === "read" ? "finished" : "reading",
+      at: null,
       rating: Number.isInteger(rating) && rating >= 1 && rating <= 5 ? rating : 0,
       url: bookUrl(bookId),
       cover: coverUrl(tag(body, "book_medium_image_url")),
-    });
+    };
+    if (shelf === "currently-reading") {
+      book.at = Number.isFinite(addedAt) ? new Date(addedAt).toISOString() : null;
+      reading.push(book);
+      continue;
+    }
+    if (!Number.isFinite(readAt)) continue;
+    book.at = new Date(readAt).toISOString();
+    finished.push({ ...book, readAt });
   }
-  return books;
+  if (shelf === "currently-reading") return reading;
+  finished.sort((left, right) => right.readAt - left.readAt);
+  return finished
+    .filter((book, index) => index === 0 || book.readAt >= since)
+    .map(({ readAt: _readAt, ...book }) => book);
 }
 
 async function shelf(
