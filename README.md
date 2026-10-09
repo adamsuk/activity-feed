@@ -8,7 +8,7 @@ Training activities come from Intervals.icu. The cache has sport, distance, movi
 
 GitHub is the last seven days. The cache stores counts only: contributions, commits, pull requests, reviews, and issues. It does not store repository names or commit messages.
 
-Goodreads is the public shelf RSS, not an API key. It keeps books finished in the last seven days and anything on the currently-reading shelf. It stores the title, author, rating, date, and link. It does not store the review text.
+Goodreads is the public shelf RSS, not an API key. It keeps books finished in the last seven days, the most recently finished book, and anything on the currently-reading shelf. It stores the title, author, rating, date, and link. It does not store the review text.
 
 ## Accounts
 

@@ -61,6 +61,19 @@ test("a user id has to be the number from the profile URL", () => {
   assert.deepEqual(accounts, [{ id: "personal", label: "Personal", userId: "12345678" }]);
 });
 
+test("an older last finish is still kept", () => {
+  const xml = `<?xml version="1.0"?><rss><channel>${item({
+    title: "Finished last month",
+    book_id: "12",
+    author_name: "Old",
+    user_rating: "5",
+    user_read_at: "Tue, 18 Aug 2026 00:00:00 +0000",
+  })}</channel></rss>`;
+  const finished = booksFromRss(xml, "read", NOW);
+  assert.deepEqual(finished.map((book) => book.title), ["Finished last month"]);
+  assert.equal(finished[0].status, "finished");
+});
+
 test("the week keeps a fresh finish and the current book, not the review", () => {
   const finished = booksFromRss(RSS, "read", NOW);
   assert.deepEqual(finished.map((book) => book.title), ["Finished recently"]);
