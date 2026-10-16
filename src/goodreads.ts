@@ -1,4 +1,5 @@
 import type { Provider } from "./provider.ts";
+import type { SourceBlock } from "./source.ts";
 import type { Env } from "./types.ts";
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -152,13 +153,36 @@ function dedupe(books: Parsed[]): Parsed[] {
   return unique;
 }
 
-export function toPublicGoodreads(value: unknown, accounts: GoodreadsAccount[]): Record<string, unknown> | null {
+function bookValue(status: "reading" | "finished", at: string | null): string {
+  const when = at && Number.isFinite(Date.parse(at))
+    ? new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", timeZone: "Europe/London" }).format(Date.parse(at))
+    : "";
+  if (status === "reading") return when ? `Reading · ${when}` : "Reading";
+  return when ? `Finished · ${when}` : "Finished";
+}
+
+async function profilePicture(userId: string, fetchImpl: typeof fetch): Promise<string> {
+  try {
+    const response = await fetchImpl(`https://www.goodreads.com/user/show/${userId}`, {
+      headers: { "User-Agent": "sradams-activity-feed", Accept: "text/html" },
+    });
+    if (!response.ok) return "";
+    const html = (await response.text()).slice(0, 100_000);
+    const match = html.match(/property="og:image" content="(https:\/\/images\.gr-assets\.com\/users\/[^"]+)"/);
+    return match?.[1] ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function toPublicGoodreads(value: unknown, accounts: GoodreadsAccount[]): SourceBlock | null {
   if (accounts.length === 0 || !value || typeof value !== "object") return null;
   const row = value as Record<string, unknown>;
+  // Only the raw cached shape is trusted: it is re-filtered against the allowlist.
   if (!Array.isArray(row.books)) return null;
   const labels = new Map(accounts.map((account) => [account.id, account.label]));
   const showLabel = accounts.length > 1;
-  const books: GoodreadsBook[] = [];
+  const activity: SourceBlock["activity"] = [];
   for (const item of row.books) {
     if (!item || typeof item !== "object") continue;
     const book = item as Record<string, unknown>;
@@ -169,23 +193,23 @@ export function toPublicGoodreads(value: unknown, accounts: GoodreadsAccount[]):
     if (!title || !url.startsWith("https://www.goodreads.com/book/show/")) continue;
     const status = book.status === "reading" ? "reading" : book.status === "finished" ? "finished" : "";
     if (!status) continue;
-    const rating = typeof book.rating === "number" ? book.rating : 0;
-    const published: GoodreadsBook = {
-      title,
-      author: typeof book.author === "string" ? clean(book.author, 120) : "",
-      status,
-      at: typeof book.at === "string" ? book.at : null,
-      rating: Number.isInteger(rating) && rating >= 1 && rating <= 5 ? rating : 0,
+    const at = typeof book.at === "string" ? book.at : null;
+    const account = showLabel ? labels.get(accountId) : "";
+    activity.push({
+      label: account ? `${account} · ${title}` : title,
+      value: bookValue(status, at),
       url,
-      cover: typeof book.cover === "string" ? coverUrl(book.cover) : "",
-    };
-    if (showLabel) published.account = labels.get(accountId);
-    books.push(published);
+    });
+    if (activity.length === 20) break;
   }
+  const picture = typeof row.profilePicture === "string" ? row.profilePicture : "";
   return {
+    label: "Reading",
+    profileUrl: `https://www.goodreads.com/user/show/${accounts[0].userId}`,
+    profilePicture: picture.startsWith("https://images.gr-assets.com/users/") ? picture : "",
+    summary: "",
+    activity,
     updatedAt: typeof row.updatedAt === "string" ? row.updatedAt : null,
-    stale: row.stale === true,
-    books: books.slice(0, 20),
   };
 }
 
@@ -206,9 +230,11 @@ export const goodreadsProvider: Provider = {
       }
     }
     books.sort((left, right) => (right.at || "").localeCompare(left.at || ""));
+    const first = accounts[0];
     return {
       updatedAt: new Date(now).toISOString(),
       stale: false,
+      profilePicture: first ? await profilePicture(first.userId, fetchImpl) : "",
       books: books.slice(0, 20),
     };
   },

@@ -1,5 +1,6 @@
 import { accountsFromEnv, binding, secretName } from "./accounts.ts";
 import type { Provider } from "./provider.ts";
+import { sourceBlock, type SourceBlock } from "./source.ts";
 import { sanitizeActivities, toPublicFeed } from "./strava.ts";
 import type { CachedActivity, Env } from "./types.ts";
 
@@ -65,9 +66,68 @@ async function pull(account: Resolved, fetchImpl: FetchImpl): Promise<CachedActi
   return activities.map((activity) => ({ ...activity, account: account.label }));
 }
 
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+function formatDistance(metres: number): string {
+  return `${(metres / 1000).toFixed(1)} km`;
+}
+
+function formatMoving(seconds: number): string {
+  const safe = Math.max(0, Math.round(seconds));
+  const hours = Math.floor(safe / 3600);
+  const minutes = Math.round((safe % 3600) / 60);
+  if (minutes === 60) return `${hours + 1}h 0m`;
+  if (hours === 0) return `${minutes}m`;
+  return `${hours}h ${minutes}m`;
+}
+
+function formatWhen(start: string): string {
+  const parsed = Date.parse(start);
+  if (!Number.isFinite(parsed)) return "";
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+    timeZone: "Europe/London",
+  }).format(parsed);
+}
+
+function sessionLabel(activity: CachedActivity): string {
+  if (activity.sport && activity.sport !== "Other") return activity.sport;
+  const name = activity.name.trim();
+  if (/football|soccer/i.test(name)) return "Football";
+  const head = name.split(" - ")[0].replace(/^Rushcliffe\s+/i, "").trim();
+  if (!head) return "Session";
+  return head.length > 22 ? `${head.slice(0, 21)}…` : head;
+}
+
+export function toPublicIntervals(value: unknown, now = Date.now()): SourceBlock | null {
+  const row = value as Record<string, unknown> | null;
+  if (row && !Array.isArray(row.activities)) return sourceBlock(value);
+  const feed = toPublicFeed(value);
+  if (feed.source !== "intervals") return null;
+  const week = feed.activities.filter((activity) => {
+    const started = Date.parse(activity.start);
+    return Number.isFinite(started) && started <= now && now - started <= WEEK_MS;
+  });
+  const distanceM = week.reduce((sum, activity) => sum + activity.distanceM, 0);
+  const movingS = week.reduce((sum, activity) => sum + activity.movingS, 0);
+  const sessions = week.length === 1 ? "session" : "sessions";
+  return {
+    label: "Training",
+    profileUrl: "https://intervals.icu/",
+    profilePicture: "",
+    summary: `${formatDistance(distanceM)} · ${week.length} ${sessions} · ${formatMoving(movingS)}`,
+    activity: week.slice(0, 20).map((activity) => ({
+      label: [activity.account, formatWhen(activity.start), sessionLabel(activity)].filter(Boolean).join(" · "),
+      value: `${formatDistance(activity.distanceM)} · ${formatMoving(activity.movingS)}`,
+      url: activity.url,
+    })),
+    updatedAt: feed.updatedAt,
+  };
+}
+
 export const intervalsProvider: Provider = {
   id: "intervals",
-  root: true,
   enabled(env) {
     return Boolean(env.INTERVALS_ACCOUNTS?.trim() || cleanApiKey(env.INTERVALS_API_KEY));
   },
@@ -89,7 +149,6 @@ export const intervalsProvider: Provider = {
     };
   },
   publish(_env, value) {
-    const feed = toPublicFeed(value);
-    return feed.source === "intervals" ? feed : null;
+    return toPublicIntervals(value);
   },
 };

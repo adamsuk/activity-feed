@@ -1,6 +1,23 @@
 # Activity feed
 
-A Cloudflare Worker that publishes one cache at `/feed.json` for sradams.co.uk. The homepage only talks to this worker. It never calls Intervals.icu or GitHub, and it never sees a token.
+A Cloudflare Worker that publishes one cache at `/feed.json` for sradams.co.uk. The homepage only talks to this worker. Every source is the same shape, so the metrics do not care which one they are showing:
+
+```json
+{
+  "updatedAt": "2026-10-16T10:00:00.000Z",
+  "github": {
+    "label": "GitHub",
+    "profileUrl": "https://github.com/adamsuk",
+    "profilePicture": "https://github.com/adamsuk.png",
+    "summary": "",
+    "activity": [
+      { "label": "Personal", "value": "12 commits · 2 PRs", "url": "https://github.com/adamsuk" }
+    ]
+  }
+}
+```
+
+`intervals` and `goodreads` use that same block. `activity` is already the rows to show. The profile picture is the one for that source. Intervals has no public picture, so `profilePicture` is empty.
 
 Each provider is a list of accounts. Personal, work, and any further account are entries in that list. Usernames are worker variables. Tokens are worker secrets. Nothing in the code names an account.
 

@@ -1,12 +1,10 @@
 import type { FetchImpl, Provider } from "./provider.ts";
 import { providers } from "./providers.ts";
-import { emptyFeed } from "./strava.ts";
 import type { Env } from "./types.ts";
 
 const SYNC_BACKOFF_MS = 5 * 60 * 1000;
 const DEFAULT_ORIGINS = "https://sradams.co.uk,https://www.sradams.co.uk";
 const PAGES_HOST = "sradams-co-uk-content.pages.dev";
-const ROOT_FIELDS = new Set(["source", "updatedAt", "stale", "activities"]);
 
 function origins(env: Env): string[] {
   return (env.ALLOWED_ORIGINS || DEFAULT_ORIGINS)
@@ -44,8 +42,8 @@ function json(body: unknown, extra?: Headers, status = 200): Response {
   headers.set("Content-Type", "application/json; charset=utf-8");
   if (!headers.has("Cache-Control")) {
     const record = body as Record<string, unknown>;
-    const onlyRoot = Object.keys(record).every((key) => ROOT_FIELDS.has(key));
-    headers.set("Cache-Control", record.source === "empty" && onlyRoot ? "no-store" : "public, max-age=300");
+    const hasSource = Object.keys(record).some((key) => key !== "updatedAt");
+    headers.set("Cache-Control", hasSource ? "public, max-age=300" : "no-store");
   }
   return new Response(JSON.stringify(body), { status, headers });
 }
@@ -131,19 +129,15 @@ async function serveProvider(
 }
 
 async function serveFeed(env: Env, fetchImpl: FetchImpl): Promise<Record<string, unknown>> {
-  const body: Record<string, unknown> = {};
-  let rooted = false;
+  const body: Record<string, unknown> = { updatedAt: null };
   for (const provider of providers) {
     const section = await serveProvider(env, provider, fetchImpl);
     if (!section) continue;
-    if (provider.root) {
-      Object.assign(body, section);
-      rooted = true;
-    } else {
-      body[provider.id] = section;
-    }
+    body[provider.id] = section;
+    const at = typeof section.updatedAt === "string" ? Date.parse(section.updatedAt) : Number.NaN;
+    const current = typeof body.updatedAt === "string" ? Date.parse(body.updatedAt) : Number.NaN;
+    if (Number.isFinite(at) && (!Number.isFinite(current) || at >= current)) body.updatedAt = section.updatedAt;
   }
-  if (!rooted) Object.assign(body, emptyFeed());
   return body;
 }
 

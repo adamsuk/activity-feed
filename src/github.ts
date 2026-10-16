@@ -1,7 +1,8 @@
 import { accountsFromEnv, binding, secretName } from "./accounts.ts";
 import type { Account } from "./accounts.ts";
 import type { Provider } from "./provider.ts";
-import type { Env, GithubAccount, GithubSnapshot } from "./types.ts";
+import type { SourceBlock } from "./source.ts";
+import type { Env, GithubAccount } from "./types.ts";
 
 const GITHUB_GRAPHQL = "https://api.github.com/graphql";
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -146,9 +147,24 @@ export async function loadGithubAccounts(
   return accounts;
 }
 
-export function toPublicGithub(value: unknown, allowed: Account[]): GithubSnapshot | null {
+function detail(stats: GithubAccount): string {
+  const word = (value: number, singular: string, plural = `${singular}s`) => (
+    `${value} ${value === 1 ? singular : plural}`
+  );
+  const parts: string[] = [];
+  if (stats.commits > 0) parts.push(word(stats.commits, "commit"));
+  if (stats.pullRequests > 0) parts.push(word(stats.pullRequests, "PR"));
+  if (stats.reviews > 0) parts.push(word(stats.reviews, "review"));
+  if (stats.issues > 0) parts.push(word(stats.issues, "issue"));
+  if (parts.length > 0) return parts.join(" · ");
+  if (stats.contributions > 0) return word(stats.contributions, "contribution");
+  return "Quiet week";
+}
+
+export function toPublicGithub(value: unknown, allowed: Account[]): SourceBlock | null {
   if (allowed.length === 0 || !value || typeof value !== "object") return null;
   const row = value as Record<string, unknown>;
+  // Only the raw cached shape is trusted: it is re-filtered against the allowlist.
   if (!Array.isArray(row.accounts)) return null;
   const byLogin = new Map<string, Record<string, unknown>>();
   for (const item of row.accounts) {
@@ -170,10 +186,19 @@ export function toPublicGithub(value: unknown, allowed: Account[]): GithubSnapsh
       issues: count(found.issues),
     });
   }
+  const first = accounts[0];
+  if (!first) return null;
   return {
+    label: "GitHub",
+    profileUrl: `https://github.com/${first.login}`,
+    profilePicture: `https://github.com/${first.login}.png`,
+    summary: "",
+    activity: accounts.map((account) => ({
+      label: account.label,
+      value: detail(account),
+      url: `https://github.com/${account.login}`,
+    })),
     updatedAt: typeof row.updatedAt === "string" ? row.updatedAt : null,
-    stale: row.stale === true,
-    accounts,
   };
 }
 
