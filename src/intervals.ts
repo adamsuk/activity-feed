@@ -100,6 +100,10 @@ function sessionLabel(activity: CachedActivity): string {
   return head.length > 22 ? `${head.slice(0, 21)}…` : head;
 }
 
+/** Raw Intervals.icu storage URL; may change, so the site falls back to the GitHub picture. */
+export const INTERVALS_PICTURE =
+  "https://storage.googleapis.com/intervals-icu-images/profile_pics/8439aaad-4817-4519-8deb-963fb1dd96a0";
+
 export function toPublicIntervals(value: unknown, now = Date.now()): SourceBlock | null {
   const row = value as Record<string, unknown> | null;
   if (row && !Array.isArray(row.activities)) return sourceBlock(value);
@@ -115,7 +119,7 @@ export function toPublicIntervals(value: unknown, now = Date.now()): SourceBlock
   return {
     label: "Training",
     profileUrl: "https://intervals.icu/",
-    profilePicture: "",
+    profilePicture: INTERVALS_PICTURE,
     summary: `${formatDistance(distanceM)} · ${week.length} ${sessions} · ${formatMoving(movingS)}`,
     activity: week.slice(0, 20).map((activity) => ({
       label: [activity.account, formatWhen(activity.start), sessionLabel(activity)].filter(Boolean).join(" · "),

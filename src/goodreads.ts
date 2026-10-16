@@ -161,6 +161,9 @@ function bookValue(status: "reading" | "finished", at: string | null): string {
   return when ? `Finished · ${when}` : "Finished";
 }
 
+/** Raw Goodreads image used when the profile scrape finds none; may change, so the site falls back to GitHub. */
+export const GOODREADS_PICTURE = "https://images.gr-assets.com/users/1792145984p8/176915360.jpg";
+
 async function profilePicture(userId: string, fetchImpl: typeof fetch): Promise<string> {
   try {
     const response = await fetchImpl(`https://www.goodreads.com/user/show/${userId}`, {
@@ -206,7 +209,7 @@ export function toPublicGoodreads(value: unknown, accounts: GoodreadsAccount[]):
   return {
     label: "Reading",
     profileUrl: `https://www.goodreads.com/user/show/${accounts[0].userId}`,
-    profilePicture: picture.startsWith("https://images.gr-assets.com/users/") ? picture : "",
+    profilePicture: picture.startsWith("https://images.gr-assets.com/users/") ? picture : GOODREADS_PICTURE,
     summary: "",
     activity,
     updatedAt: typeof row.updatedAt === "string" ? row.updatedAt : null,
