@@ -90,8 +90,9 @@ test("each token is sent only for its own account and is not stored", async () =
   assert.equal(calls.length, 2);
   assert.equal(calls[0]?.auth, `Bearer ${TOKEN}`);
   assert.equal(calls[1]?.auth, `Bearer ${WORK_TOKEN}`);
-  const published = snapshot as { profilePicture: string; activity: { label: string; value: string }[] };
+  const published = snapshot as { profilePicture: string; fallbackPicture?: boolean; activity: { label: string; value: string }[] };
   assert.equal(published.profilePicture, "https://github.com/adamsuk.png");
+  assert.equal(published.fallbackPicture, true);
   assert.match(published.activity[0]?.value ?? "", /64 commits/);
   assert.match(published.activity[1]?.value ?? "", /43 contributions/);
   const saved = (await store.FEED.get("github")) ?? "";

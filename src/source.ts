@@ -9,6 +9,8 @@ export type SourceBlock = {
   label: string;
   profileUrl: string;
   profilePicture: string;
+  /** The picture the site swaps to when another source's picture is missing or fails to load. */
+  fallbackPicture?: boolean;
   summary: string;
   activity: SourceActivity[];
   updatedAt: string | null;
@@ -43,7 +45,7 @@ export function sourceBlock(value: unknown): SourceBlock | null {
     activity.push({ label, value: detail, url: https(activityRow.url) });
     if (activity.length === 20) break;
   }
-  return {
+  const block: SourceBlock = {
     label: clean(row.label, 40),
     profileUrl: https(row.profileUrl),
     profilePicture: https(row.profilePicture),
@@ -51,4 +53,6 @@ export function sourceBlock(value: unknown): SourceBlock | null {
     activity,
     updatedAt: typeof row.updatedAt === "string" ? row.updatedAt : null,
   };
+  if (row.fallbackPicture === true) block.fallbackPicture = true;
+  return block;
 }

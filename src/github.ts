@@ -192,6 +192,7 @@ export function toPublicGithub(value: unknown, allowed: Account[]): SourceBlock 
     label: "GitHub",
     profileUrl: `https://github.com/${first.login}`,
     profilePicture: `https://github.com/${first.login}.png`,
+    fallbackPicture: true,
     summary: "",
     activity: accounts.map((account) => ({
       label: account.label,
