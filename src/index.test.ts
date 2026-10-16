@@ -43,39 +43,34 @@ test("public feed is empty and does not call Intervals.icu", async () => {
   );
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("Cache-Control"), "no-store");
-  assert.deepEqual(await response.json(), {
-    source: "empty",
-    updatedAt: null,
-    stale: false,
-    activities: [],
-  });
+  assert.deepEqual(await response.json(), { updatedAt: null });
   assert.equal(urls.length, 0);
 });
 
 test("sanitize keeps a homepage row and drops gps and heart rate", async () => {
   const store = env(knownKey);
+  const recent = new Date(Date.now() - 3_600_000).toISOString();
   const feed = await refresh(store, intervalsProvider, async (input) => {
     const url = String(input);
     if (url.includes("/athlete/0/activities")) {
       return jsonResponse([
-        rawActivity,
-        { ...rawActivity, id: "i100", private: true, name: "Hidden" },
-        { ...rawActivity, id: "i101", type: "VirtualRide", name: "Turbo", start_date_local: "2026-10-02T06:00:00" },
+        { ...rawActivity, start_date_local: recent },
+        { ...rawActivity, id: "i100", private: true, name: "Hidden", start_date_local: recent },
+        { ...rawActivity, id: "i101", type: "VirtualRide", name: "Turbo", start_date_local: recent },
       ]);
     }
     throw new Error(`unexpected ${url}`);
-  }) as Feed;
+  }) as { label: string; activity: { label: string; value: string }[] };
 
-  assert.equal(feed.activities.length, 2);
-  assert.equal(feed.activities[0]?.sport, "Ride");
-  assert.equal(feed.activities[0]?.name, "Turbo");
-  assert.equal(feed.activities[1]?.name, "Morning loop");
-  assert.equal(feed.activities[1]?.distanceM, 5000);
-  assert.equal(feed.activities[1]?.url, "https://intervals.icu/activities/i99");
-  const saved = JSON.stringify(feed);
+  assert.equal(feed.label, "Training");
+  assert.equal(feed.activity.length, 2);
+  assert.match(feed.activity.map((row) => row.label).join(" "), /Run/);
+  assert.match(feed.activity.map((row) => row.label).join(" "), /Ride/);
+  const saved = (await store.FEED.get("intervals")) ?? "";
   assert.equal(saved.includes("heartrate"), false);
   assert.equal(saved.includes("52.83"), false);
   assert.equal(saved.includes("latlng"), false);
+  assert.equal(saved.includes("Hidden"), false);
 });
 
 test("a failed refresh keeps the last good cache and marks it stale", async () => {
@@ -97,13 +92,14 @@ test("a failed refresh keeps the last good cache and marks it stale", async () =
           elevationM: 0,
           location: "",
           url: "https://intervals.icu/activities/i1",
+          start: new Date(Date.now() - 3_600_000).toISOString(),
         },
       ],
     }),
   );
-  const feed = await refresh(store, intervalsProvider, async () => jsonResponse({ message: "no" }, 500)) as Feed;
+  const feed = await refresh(store, intervalsProvider, async () => jsonResponse({ message: "no" }, 500)) as { stale?: boolean; activity: { value: string }[] };
   assert.equal(feed.stale, true);
-  assert.equal(feed.activities[0]?.name, "Kept");
+  assert.match(feed.activity[0]?.value ?? "", /1\.0 km/);
 });
 
 test("an env key fills the feed and is not stored", async () => {
@@ -114,13 +110,13 @@ test("an env key fills the feed and is not stored", async () => {
     async (input) => {
       const url = String(input);
       if (url.endsWith("/athlete")) return jsonResponse({ id: "i2049151", name: "Scott Adams" });
-      if (url.includes("/activities")) return jsonResponse([rawActivity]);
+      if (url.includes("/activities")) return jsonResponse([{ ...rawActivity, start_date_local: new Date().toISOString() }]);
       throw new Error(`unexpected ${url}`);
     },
   );
-  const body = (await response.json()) as { source: string; activities: unknown[] };
-  assert.equal(body.source, "intervals");
-  assert.equal(body.activities.length, 1);
+  const body = (await response.json()) as { intervals: { label: string; activity: unknown[] } };
+  assert.equal(body.intervals.label, "Training");
+  assert.equal(body.intervals.activity.length, 1);
   const saved = (await store.FEED.get("intervals")) ?? "";
   assert.equal(saved.includes("intervals*key"), false);
 });
@@ -132,8 +128,9 @@ test("a refused activity pull stays empty and does not leak the key", async () =
     store,
     async () => jsonResponse({ message: "Unauthorized" }, 401),
   );
-  const body = (await response.json()) as { source: string };
-  assert.equal(body.source, "empty");
+  const body = (await response.json()) as { updatedAt: string | null; intervals?: unknown };
+  assert.equal(body.updatedAt, null);
+  assert.equal(body.intervals, undefined);
   const sync = JSON.parse((await store.FEED.get("intervals:sync")) ?? "{}") as { message?: string };
   assert.match(sync.message ?? "", /401/);
   assert.equal((sync.message ?? "").includes("intervals*key"), false);
@@ -150,13 +147,13 @@ test("intervals accounts are an array and keys stay out of the cache", async () 
   const feed = await refresh(store, intervalsProvider, async () => {
     calls += 1;
     const id = calls === 1 ? "i1" : "i2";
-    const start = calls === 1 ? "2026-10-01T06:00:00" : "2026-10-02T06:00:00";
+    const start = new Date(Date.now() - calls * 3_600_000).toISOString();
     return jsonResponse([{ ...rawActivity, id, name: id, start_date_local: start }]);
-  });
+  }) as { activity: { label: string }[] };
   assert.equal(calls, 2);
-  assert.equal(feed.activities[0]?.name, "i2");
-  assert.equal(feed.activities[0]?.account, "Work");
-  assert.equal(feed.activities[1]?.account, "Personal");
+  const labels = feed.activity.map((row) => row.label).join(" ");
+  assert.match(labels, /Personal/);
+  assert.match(labels, /Work/);
   const saved = (await store.FEED.get("intervals")) ?? "";
   assert.equal(saved.includes("intervals*key"), false);
   assert.equal(saved.includes("work-key-99"), false);

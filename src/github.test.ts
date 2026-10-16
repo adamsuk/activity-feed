@@ -90,8 +90,10 @@ test("each token is sent only for its own account and is not stored", async () =
   assert.equal(calls.length, 2);
   assert.equal(calls[0]?.auth, `Bearer ${TOKEN}`);
   assert.equal(calls[1]?.auth, `Bearer ${WORK_TOKEN}`);
-  assert.equal(snapshot.accounts[0]?.commits, 64);
-  assert.equal(snapshot.accounts[1]?.contributions, 43);
+  const published = snapshot as { profilePicture: string; activity: { label: string; value: string }[] };
+  assert.equal(published.profilePicture, "https://github.com/adamsuk.png");
+  assert.match(published.activity[0]?.value ?? "", /64 commits/);
+  assert.match(published.activity[1]?.value ?? "", /43 contributions/);
   const saved = (await store.FEED.get("github")) ?? "";
   assert.equal(saved.includes(TOKEN), false);
   assert.equal(saved.includes(WORK_TOKEN), false);
@@ -181,9 +183,10 @@ test("the public feed adds github counts and still hides the token", async () =>
     },
   );
   assert.equal(response.headers.get("Access-Control-Allow-Origin"), "https://feat-github-week.sradams-co-uk-content.pages.dev");
-  const body = await response.json() as { source: string; github: { accounts: { login: string }[] } };
-  assert.equal(body.source, "intervals");
-  assert.deepEqual(body.github.accounts.map((account) => account.login), ["adamsuk", "sra405"]);
+  const body = await response.json() as { updatedAt: string | null; github: { activity: { label: string; url: string }[] } };
+  assert.equal(typeof body.updatedAt, "string");
+  assert.deepEqual(body.github.activity.map((row) => row.label), ["Personal", "Work"]);
+  assert.equal(body.github.activity[0]?.url, "https://github.com/adamsuk");
   assert.equal(JSON.stringify(body).includes(TOKEN), false);
 });
 
@@ -196,6 +199,6 @@ test("a poisoned cache cannot add another account", () => {
       { login: "sra405", contributions: 2, commits: 0, pullRequests: 0, reviews: 0, issues: 0 },
     ],
   }, ALLOWED);
-  assert.equal(snapshot?.accounts[0]?.label, "Personal");
-  assert.equal(snapshot?.accounts.some((account) => account.login === "evil"), false);
+  assert.equal(snapshot?.activity[0]?.label, "Personal");
+  assert.equal(JSON.stringify(snapshot).includes("evil"), false);
 });
