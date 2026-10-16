@@ -66,4 +66,8 @@ export interface Env {
    * [{"id":"personal","label":"Personal","userId":"12345678"}]
    */
   GOODREADS_ACCOUNTS?: string;
+  /** Secret. Without it the Last.fm source is skipped. */
+  LASTFM_API_KEY?: string;
+  /** Last.fm username. Defaults to scotty-bob. */
+  LASTFM_USER?: string;
 }
