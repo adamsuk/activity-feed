@@ -1,5 +1,5 @@
 import type { Provider } from "./provider.ts";
-import { sourceBlock, type SourceBlock } from "./source.ts";
+import type { SourceBlock } from "./source.ts";
 import type { Env } from "./types.ts";
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -178,7 +178,8 @@ async function profilePicture(userId: string, fetchImpl: typeof fetch): Promise<
 export function toPublicGoodreads(value: unknown, accounts: GoodreadsAccount[]): SourceBlock | null {
   if (accounts.length === 0 || !value || typeof value !== "object") return null;
   const row = value as Record<string, unknown>;
-  if (!Array.isArray(row.books)) return sourceBlock(value);
+  // Only the raw cached shape is trusted: it is re-filtered against the allowlist.
+  if (!Array.isArray(row.books)) return null;
   const labels = new Map(accounts.map((account) => [account.id, account.label]));
   const showLabel = accounts.length > 1;
   const activity: SourceBlock["activity"] = [];

@@ -105,3 +105,15 @@ test("the feed stores titles and drops anything not configured", async () => {
   const published = toPublicGoodreads({ books: [{ title: "Nope" }] }, goodreadsAccounts(store));
   assert.deepEqual(published && published.activity, []);
 });
+
+test("a block-shaped cache is not published unfiltered", () => {
+  const poisoned = {
+    label: "Reading",
+    profileUrl: "https://www.goodreads.com/user/show/1",
+    profilePicture: "",
+    summary: "",
+    activity: [{ label: "Injected", value: "Reading", url: "https://example.com/" }],
+    updatedAt: null,
+  };
+  assert.equal(toPublicGoodreads(poisoned, [{ id: "main", userId: "1", label: "Me" } as never]), null);
+});

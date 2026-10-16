@@ -1,7 +1,7 @@
 import { accountsFromEnv, binding, secretName } from "./accounts.ts";
 import type { Account } from "./accounts.ts";
 import type { Provider } from "./provider.ts";
-import { sourceBlock, type SourceBlock } from "./source.ts";
+import type { SourceBlock } from "./source.ts";
 import type { Env, GithubAccount } from "./types.ts";
 
 const GITHUB_GRAPHQL = "https://api.github.com/graphql";
@@ -164,7 +164,8 @@ function detail(stats: GithubAccount): string {
 export function toPublicGithub(value: unknown, allowed: Account[]): SourceBlock | null {
   if (allowed.length === 0 || !value || typeof value !== "object") return null;
   const row = value as Record<string, unknown>;
-  if (!Array.isArray(row.accounts)) return sourceBlock(value);
+  // Only the raw cached shape is trusted: it is re-filtered against the allowlist.
+  if (!Array.isArray(row.accounts)) return null;
   const byLogin = new Map<string, Record<string, unknown>>();
   for (const item of row.accounts) {
     if (!item || typeof item !== "object") continue;

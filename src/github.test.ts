@@ -202,3 +202,15 @@ test("a poisoned cache cannot add another account", () => {
   assert.equal(snapshot?.activity[0]?.label, "Personal");
   assert.equal(JSON.stringify(snapshot).includes("evil"), false);
 });
+
+test("a block-shaped cache is not published unfiltered", () => {
+  const poisoned = {
+    label: "GitHub",
+    profileUrl: "https://github.com/someone-else",
+    profilePicture: "",
+    summary: "",
+    activity: [{ label: "Intruder", value: "99 commits", url: "https://github.com/someone-else" }],
+    updatedAt: "2026-10-16T00:00:00.000Z",
+  };
+  assert.equal(toPublicGithub(poisoned, [{ id: "main", login: "adamsuk", label: "Personal" } as never]), null);
+});
