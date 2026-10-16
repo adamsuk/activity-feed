@@ -106,7 +106,12 @@ export const INTERVALS_PICTURE =
 
 export function toPublicIntervals(value: unknown, now = Date.now()): SourceBlock | null {
   const row = value as Record<string, unknown> | null;
-  if (row && !Array.isArray(row.activities)) return sourceBlock(value);
+  if (row && !Array.isArray(row.activities)) {
+    // A cached row may predate the raw picture URL (profilePicture ""), so fill it in.
+    const cached = sourceBlock(value);
+    if (cached && !cached.profilePicture.trim()) cached.profilePicture = INTERVALS_PICTURE;
+    return cached;
+  }
   const feed = toPublicFeed(value);
   if (feed.source !== "intervals") return null;
   const week = feed.activities.filter((activity) => {

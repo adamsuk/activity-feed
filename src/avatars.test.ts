@@ -27,3 +27,12 @@ test("only a literal true fallback flag survives a cached block", () => {
   assert.equal(sourceBlock({ ...base, fallbackPicture: true })?.fallbackPicture, true);
   assert.equal(sourceBlock({ ...base, fallbackPicture: "yes" })?.fallbackPicture, undefined);
 });
+
+test("cached Intervals block with an empty picture gets the raw Intervals URL", () => {
+  const block = toPublicIntervals({
+    label: "Training", profileUrl: "https://intervals.icu/", profilePicture: "", summary: "17.2 km · 3 sessions · 2h 3m",
+    activity: [{ label: "15 Oct · Football", value: "5.9 km · 1h 0m", url: "https://intervals.icu/activities/i197749007" }],
+    updatedAt: "2026-10-16T11:00:58.741Z",
+  });
+  assert.equal(block?.profilePicture, INTERVALS_PICTURE);
+});
