@@ -117,3 +117,27 @@ test("a block-shaped cache is not published unfiltered", () => {
   };
   assert.equal(toPublicGoodreads(poisoned, [{ id: "main", userId: "1", label: "Me" } as never]), null);
 });
+
+test("the newest book is featured with its cover, author and rating", () => {
+  const block = toPublicGoodreads({
+    updatedAt: "2026-10-09T12:00:00Z",
+    books: [
+      { accountId: "personal", title: "Finished recently", author: "Ada & Grace", status: "finished", at: "2026-10-07T00:00:00Z", rating: 4, url: "https://www.goodreads.com/book/show/11", cover: "https://i.gr-assets.com/images/cover._SY475_.jpg" },
+      { accountId: "personal", title: "Older", author: "Old", status: "finished", at: "2026-08-18T00:00:00Z", rating: 5, url: "https://www.goodreads.com/book/show/12", cover: "https://evil.example/x.jpg" },
+    ],
+  }, [{ id: "personal", label: "Personal", userId: "1" }]);
+  assert.equal(block?.featured?.heading, "Latest finished");
+  assert.equal(block?.featured?.title, "Finished recently");
+  assert.equal(block?.featured?.subtitle, "Ada & Grace");
+  assert.equal(block?.featured?.image, "https://i.gr-assets.com/images/cover._SY475_.jpg");
+  assert.deepEqual(block?.featured?.details, ["Finished · 7 Oct", "★★★★☆"]);
+});
+
+test("the large cover is preferred and a no-photo placeholder is dropped", () => {
+  const rss = `<rss>${item({ title: "Big", book_id: "21", user_date_added: "Sat, 03 Oct 2026 00:00:00 +0000", book_large_image_url: "https://i.gr-assets.com/l.jpg", book_medium_image_url: "https://i.gr-assets.com/m.jpg" })}</rss>`;
+  const [book] = booksFromRss(rss, "currently-reading", NOW);
+  assert.equal(book.cover, "https://i.gr-assets.com/l.jpg");
+  const block = toPublicGoodreads({ books: [{ ...book, accountId: "personal", cover: "https://s.gr-assets.com/assets/nophoto/book/111x148.png" }] }, [{ id: "personal", label: "P", userId: "1" }]);
+  assert.equal(block?.featured?.heading, "Currently reading");
+  assert.equal(block?.featured?.image, "");
+});

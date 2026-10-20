@@ -144,7 +144,8 @@ test("intervals accounts are an array and keys stay out of the cache", async () 
   ]);
   store.INTERVALS_API_KEY_WORK = "work-key-99";
   let calls = 0;
-  const feed = await refresh(store, intervalsProvider, async () => {
+  const feed = await refresh(store, intervalsProvider, async (input) => {
+    if (String(input).includes("/map")) return jsonResponse({}, 404);
     calls += 1;
     const id = calls === 1 ? "i1" : "i2";
     const start = new Date(Date.now() - calls * 3_600_000).toISOString();
@@ -186,4 +187,49 @@ test("cors allows the site and its preview and ignores other origins", async () 
     fetchImpl,
   );
   assert.equal(blocked.headers.get("Access-Control-Allow-Origin"), null);
+});
+
+test("the latest activity is featured with a shape-only route and no coordinates", async () => {
+  const store = env(knownKey);
+  const recent = new Date(Date.now() - 3_600_000).toISOString();
+  const older = new Date(Date.now() - 7_200_000).toISOString();
+  // A 2.2 km out-and-back line heading north-east from a "home" point.
+  const latlngs = Array.from({ length: 200 }, (_, index) => [52.8301 + index * 0.0001, -1.1801 + index * 0.00005]);
+  const urls: string[] = [];
+  const feed = await refresh(store, intervalsProvider, async (input) => {
+    const url = String(input);
+    urls.push(url);
+    if (url.includes("/athlete/0/activities")) {
+      return jsonResponse([
+        { ...rawActivity, id: "i5", name: "Older", start_date_local: older },
+        { ...rawActivity, id: "i6", name: "Evening run", start_date_local: recent },
+      ]);
+    }
+    if (url.endsWith("/activity/i6/map")) return jsonResponse({ bounds: [[52.83, -1.18], [52.85, -1.17]], latlngs });
+    throw new Error(`unexpected ${url}`);
+  }) as { featured?: { heading: string; title: string; subtitle: string; details: string[]; route?: { width: number; height: number; points: number[][] } } };
+  assert.ok(urls.some((url) => url.endsWith("/activity/i6/map")));
+  assert.equal(feed.featured?.heading, "Latest activity");
+  assert.equal(feed.featured?.title, "Evening run");
+  assert.match(feed.featured?.subtitle ?? "", /^Run · /);
+  assert.deepEqual(feed.featured?.details.slice(0, 2), ["5.0 km", "25m"]);
+  const route = feed.featured?.route;
+  assert.ok(route && route.points.length >= 2);
+  assert.ok(route.points.every(([x, y]) => x >= 0 && y >= 0 && x <= route.width && y <= route.height));
+  const saved = (await store.FEED.get("intervals")) ?? "";
+  assert.equal(saved.includes("52.83"), false);
+  assert.equal(saved.includes("-1.18"), false);
+  assert.equal(JSON.stringify(feed).includes("52.8"), false);
+});
+
+test("an activity without GPS still gets a featured card with a fallback note", async () => {
+  const store = env(knownKey);
+  const recent = new Date(Date.now() - 3_600_000).toISOString();
+  const feed = await refresh(store, intervalsProvider, async (input) => {
+    const url = String(input);
+    if (url.includes("/athlete/0/activities")) return jsonResponse([{ ...rawActivity, id: "i7", name: "Turbo", type: "VirtualRide", start_date_local: recent }]);
+    return jsonResponse({ latlngs: null });
+  }) as { featured?: { route?: unknown; description: string } };
+  assert.equal(feed.featured?.route, undefined);
+  assert.equal(feed.featured?.description, "No GPS map for this session.");
 });

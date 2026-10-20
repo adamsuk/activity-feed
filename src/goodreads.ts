@@ -1,3 +1,4 @@
+import { sanitizeFeatured, type Featured } from "./featured.ts";
 import type { Provider } from "./provider.ts";
 import type { SourceBlock } from "./source.ts";
 import type { Env } from "./types.ts";
@@ -104,7 +105,7 @@ export function booksFromRss(xml: string, shelf: "read" | "currently-reading", n
       at: null,
       rating: Number.isInteger(rating) && rating >= 1 && rating <= 5 ? rating : 0,
       url: bookUrl(bookId),
-      cover: coverUrl(tag(body, "book_medium_image_url")),
+      cover: coverUrl(tag(body, "book_large_image_url")) || coverUrl(tag(body, "book_medium_image_url")),
     };
     if (shelf === "currently-reading") {
       book.at = Number.isFinite(addedAt) ? new Date(addedAt).toISOString() : null;
@@ -178,6 +179,21 @@ async function profilePicture(userId: string, fetchImpl: typeof fetch): Promise<
   }
 }
 
+function featuredBook(book: Record<string, unknown>, title: string, url: string, status: string, at: string | null): Featured | null {
+  const cover = typeof book.cover === "string" ? coverUrl(book.cover) : "";
+  const rating = typeof book.rating === "number" && book.rating >= 1 && book.rating <= 5 ? book.rating : 0;
+  return sanitizeFeatured({
+    heading: status === "reading" ? "Currently reading" : "Latest finished",
+    title,
+    subtitle: typeof book.author === "string" ? book.author : "",
+    description: "",
+    url,
+    // Goodreads' "no photo" placeholder is worse than the site's own fallback.
+    image: cover.includes("/nophoto/") ? "" : cover,
+    details: [bookValue(status as "reading" | "finished", at), rating ? `${"★".repeat(rating)}${"☆".repeat(5 - rating)}` : ""],
+  });
+}
+
 export function toPublicGoodreads(value: unknown, accounts: GoodreadsAccount[]): SourceBlock | null {
   if (accounts.length === 0 || !value || typeof value !== "object") return null;
   const row = value as Record<string, unknown>;
@@ -186,6 +202,7 @@ export function toPublicGoodreads(value: unknown, accounts: GoodreadsAccount[]):
   const labels = new Map(accounts.map((account) => [account.id, account.label]));
   const showLabel = accounts.length > 1;
   const activity: SourceBlock["activity"] = [];
+  let featured: Featured | null = null;
   for (const item of row.books) {
     if (!item || typeof item !== "object") continue;
     const book = item as Record<string, unknown>;
@@ -198,6 +215,7 @@ export function toPublicGoodreads(value: unknown, accounts: GoodreadsAccount[]):
     if (!status) continue;
     const at = typeof book.at === "string" ? book.at : null;
     const account = showLabel ? labels.get(accountId) : "";
+    if (!featured) featured = featuredBook(book, title, url, status, at);
     activity.push({
       label: account ? `${account} · ${title}` : title,
       value: bookValue(status, at),
@@ -213,6 +231,7 @@ export function toPublicGoodreads(value: unknown, accounts: GoodreadsAccount[]):
     summary: "",
     activity,
     updatedAt: typeof row.updatedAt === "string" ? row.updatedAt : null,
+    ...(featured ? { featured } : {}),
   };
 }
 

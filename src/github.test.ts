@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { accountFromCollection, cleanToken, githubProvider, loadGithubAccounts, toPublicGithub } from "./github.ts";
+import { accountFromCollection, featuredPr, latestPrFromJson, cleanToken, githubProvider, loadGithubAccounts, toPublicGithub } from "./github.ts";
 import { handleRequest, refresh } from "./index.ts";
 import { MemoryKv } from "./memory-kv.ts";
 import type { Env } from "./types.ts";
@@ -87,9 +87,12 @@ test("each token is sent only for its own account and is not stored", async () =
     return viewerResponse(login, stats);
   });
 
-  assert.equal(calls.length, 2);
+  // Two stats calls, then the latest-PR lookup with the personal token only.
+  assert.equal(calls.length, 3);
   assert.equal(calls[0]?.auth, `Bearer ${TOKEN}`);
   assert.equal(calls[1]?.auth, `Bearer ${WORK_TOKEN}`);
+  assert.equal(calls[2]?.auth, `Bearer ${TOKEN}`);
+  assert.match(calls[2]?.query ?? "", /pullRequests/);
   const published = snapshot as { profilePicture: string; fallbackPicture?: boolean; activity: { label: string; value: string }[] };
   assert.equal(published.profilePicture, "https://github.com/adamsuk.png");
   assert.equal(published.fallbackPicture, true);
@@ -214,4 +217,29 @@ test("a block-shaped cache is not published unfiltered", () => {
     updatedAt: "2026-10-16T00:00:00.000Z",
   };
   assert.equal(toPublicGithub(poisoned, [{ id: "main", login: "adamsuk", label: "Personal" } as never]), null);
+});
+
+test("the latest public PR becomes the featured card; private repos are skipped", async () => {
+  const body = { data: { user: { pullRequests: { nodes: [
+    { title: "Secret", body: "", url: "https://github.com/acme/private/pull/1", number: 1, state: "OPEN", isDraft: false, createdAt: "2026-10-19T10:00:00Z", mergedAt: null, repository: { nameWithOwner: "acme/private", isPrivate: true } },
+    { title: "Add featured items", body: "## Why\n\nShow a **card** per source. See [docs](https://x.example).\n\n```ts\ncode()\n```", url: "https://github.com/adamsuk/activity-feed/pull/9", number: 9, state: "MERGED", isDraft: false, createdAt: "2026-10-18T10:00:00Z", mergedAt: "2026-10-19T09:00:00Z", repository: { nameWithOwner: "adamsuk/activity-feed", isPrivate: false } },
+  ] } } } };
+  const pr = latestPrFromJson(body);
+  assert.ok(pr);
+  assert.equal(pr.repo, "adamsuk/activity-feed");
+  assert.equal(pr.state, "Merged");
+  assert.equal(pr.body, "Why Show a card per source. See docs.");
+  const featured = featuredPr(pr);
+  assert.equal(featured?.heading, "Latest PR");
+  assert.equal(featured?.title, "Add featured items");
+  assert.equal(featured?.subtitle, "adamsuk/activity-feed #9");
+  assert.deepEqual(featured?.details, ["Merged", "Merged 19 Oct"]);
+  const block = toPublicGithub({ updatedAt: "x", accounts: [
+    { login: "adamsuk", contributions: 1 }, { login: "sra405", contributions: 1 },
+  ], latestPr: pr }, ALLOWED);
+  assert.equal(block?.featured?.url, "https://github.com/adamsuk/activity-feed/pull/9");
+  const without = toPublicGithub({ updatedAt: "x", accounts: [
+    { login: "adamsuk" }, { login: "sra405" },
+  ] }, ALLOWED);
+  assert.equal(without && "featured" in without, false);
 });

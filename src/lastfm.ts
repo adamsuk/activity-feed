@@ -1,3 +1,4 @@
+import { sanitizeFeatured, type Featured } from "./featured.ts";
 import type { Provider } from "./provider.ts";
 import type { SourceBlock } from "./source.ts";
 import type { Env } from "./types.ts";
@@ -65,7 +66,26 @@ async function call(
 }
 
 type Track = { name: string; artist: string; url: string; nowPlaying: boolean; at: string | null };
-type Top = { name: string; artist: string; url: string; plays: number };
+type Top = { name: string; artist: string; url: string; plays: number; image?: string };
+
+/** Last.fm's grey star, served when it has no real artwork. */
+const PLACEHOLDER = "2a96cbd8b46e442fc41c2b86b821562f";
+
+export function imageFromJson(value: unknown): string {
+  const images = list(value);
+  for (const size of ["extralarge", "large", "medium"]) {
+    const found = images.find((image) => image.size === size);
+    const url = typeof found?.["#text"] === "string" ? found["#text"] : "";
+    if (!url || url.includes(PLACEHOLDER)) continue;
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol === "https:" && /(^|\.)(fastly\.net|last\.fm|lst\.fm)$/.test(parsed.hostname)) return parsed.toString();
+    } catch {
+      // try the next size
+    }
+  }
+  return "";
+}
 
 export function recentFromJson(body: Record<string, unknown>): { tracks: Track[]; scrobbles: number } {
   const root = (body.recenttracks ?? {}) as Record<string, unknown>;
@@ -97,12 +117,15 @@ export function topFromJson(body: Record<string, unknown>, root: string, item: s
   const name = clean(first.name, 160);
   if (!name) return null;
   const plays = Number(first.playcount);
-  return {
+  const top: Top = {
     name,
     artist: artistName(first.artist),
     url: lastfmUrl(first.url),
     plays: Number.isInteger(plays) && plays > 0 ? plays : 0,
   };
+  const image = imageFromJson(first.image);
+  if (image) top.image = image;
+  return top;
 }
 
 function plays(count: number): string {
@@ -129,6 +152,94 @@ function topRow(prefix: string, value: unknown): SourceBlock["activity"][number]
   };
 }
 
+function youtubeSearch(track: string, artist: string): string {
+  const url = new URL("https://www.youtube.com/results");
+  url.searchParams.set("search_query", `${artist} ${track}`.trim());
+  return url.toString();
+}
+
+export function featuredMusic(row: Record<string, unknown>): Featured | null {
+  const album = (row.topAlbum ?? null) as Record<string, unknown> | null;
+  const track = (row.topTrack ?? null) as Record<string, unknown> | null;
+  const albumName = clean(album?.name, 160);
+  const trackName = clean(track?.name, 160);
+  const trackArtist = clean(track?.artist, 120);
+  const video = (row.video ?? null) as Record<string, unknown> | null;
+  const videoMatches = video && video.track === trackName && video.artist === trackArtist;
+  const trackLink = trackName
+    ? {
+      label: trackName,
+      detail: [trackArtist, typeof track?.plays === "number" && track.plays > 0 ? plays(track.plays) : ""].filter(Boolean).join(" · "),
+      url: lastfmUrl(track?.url) || youtubeSearch(trackName, trackArtist),
+    }
+    : undefined;
+  const youtube = videoMatches ? { youtubeId: video.youtubeId, title: `${trackArtist} – ${trackName}` } : undefined;
+  if (albumName) {
+    const count = typeof album?.plays === "number" && album.plays > 0 ? plays(album.plays) : "";
+    return sanitizeFeatured({
+      heading: "Top album this week",
+      title: albumName,
+      subtitle: clean(album?.artist, 120),
+      description: "",
+      url: lastfmUrl(album?.url),
+      image: typeof album?.image === "string" ? album.image : "",
+      details: [count],
+      link: trackLink ? { ...trackLink, label: `Top track · ${trackLink.label}` } : undefined,
+      video: youtube,
+    });
+  }
+  if (!trackLink) return null;
+  return sanitizeFeatured({
+    heading: "Top track this week",
+    title: trackName,
+    subtitle: trackArtist,
+    description: "",
+    url: trackLink.url,
+    image: "",
+    details: [trackLink.detail.split(" · ").pop() ?? ""],
+    video: youtube,
+  });
+}
+
+/**
+ * Optional. With YOUTUBE_API_KEY set, finds one embeddable video for the top track.
+ * The result is reused until the top track changes, so the 100-unit search runs rarely.
+ */
+async function loadVideo(
+  env: Env,
+  topTrack: Top | null,
+  fetchImpl: typeof fetch,
+): Promise<{ track: string; artist: string; youtubeId: string } | null> {
+  const key = env.YOUTUBE_API_KEY?.trim();
+  if (!key || !topTrack) return null;
+  try {
+    const previous = JSON.parse((await env.FEED.get("lastfm")) ?? "null") as Record<string, unknown> | null;
+    const cached = previous?.video as Record<string, unknown> | undefined;
+    if (cached && cached.track === topTrack.name && cached.artist === topTrack.artist && typeof cached.youtubeId === "string") {
+      return { track: topTrack.name, artist: topTrack.artist, youtubeId: cached.youtubeId };
+    }
+  } catch {
+    // search again
+  }
+  try {
+    const url = new URL("https://www.googleapis.com/youtube/v3/search");
+    url.searchParams.set("part", "id");
+    url.searchParams.set("type", "video");
+    url.searchParams.set("videoEmbeddable", "true");
+    url.searchParams.set("maxResults", "1");
+    url.searchParams.set("q", `${topTrack.artist} ${topTrack.name}`);
+    url.searchParams.set("key", key);
+    const response = await fetchImpl(url, { headers: { "User-Agent": "sradams-activity-feed" } });
+    if (!response.ok) return null;
+    const body = (await response.json()) as { items?: Array<{ id?: { videoId?: unknown } }> };
+    const id = body.items?.[0]?.id?.videoId;
+    if (typeof id !== "string" || !/^[A-Za-z0-9_-]{11}$/.test(id)) return null;
+    return { track: topTrack.name, artist: topTrack.artist, youtubeId: id };
+  } catch {
+    return null;
+  }
+}
+
 export function toPublicLastfm(value: unknown, user: string): SourceBlock | null {
   if (!user || !value || typeof value !== "object") return null;
   const row = value as Record<string, unknown>;
@@ -151,6 +262,7 @@ export function toPublicLastfm(value: unknown, user: string): SourceBlock | null
     if (top) activity.push(top);
   }
   const scrobbles = typeof row.scrobbles === "number" && row.scrobbles > 0 ? row.scrobbles : 0;
+  const featured = featuredMusic(row);
   return {
     label: "Music",
     profileUrl: `https://www.last.fm/user/${user}`,
@@ -158,6 +270,7 @@ export function toPublicLastfm(value: unknown, user: string): SourceBlock | null
     summary: scrobbles ? `${scrobbles === 1 ? "1 scrobble" : `${scrobbles} scrobbles`} this week` : "",
     activity,
     updatedAt: typeof row.updatedAt === "string" ? row.updatedAt : null,
+    ...(featured ? { featured } : {}),
   };
 }
 
@@ -173,6 +286,7 @@ export const lastfmProvider: Provider = {
     const topTrack = topFromJson(await call("user.gettoptracks", week, env, fetchImpl), "toptracks", "track");
     const topAlbum = topFromJson(await call("user.gettopalbums", week, env, fetchImpl), "topalbums", "album");
     const topArtist = topFromJson(await call("user.gettopartists", week, env, fetchImpl), "topartists", "artist");
+    const video = await loadVideo(env, topTrack, fetchImpl);
     return {
       updatedAt: new Date(now).toISOString(),
       stale: false,
@@ -181,6 +295,7 @@ export const lastfmProvider: Provider = {
       topTrack,
       topAlbum,
       topArtist,
+      ...(video ? { video } : {}),
     };
   },
   publish(env, value) {

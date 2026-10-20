@@ -20,6 +20,7 @@ crons = ["*/30 * * * *"]
 # GOODREADS_ACCOUNTS is an optional JSON array of {id, label, userId}. No token.
 # The user id is the number in the profile URL, and the shelves must be public.
 # LASTFM_API_KEY is a secret; without it the Last.fm source is skipped.
+# YOUTUBE_API_KEY is an optional secret; with it the Last.fm card embeds a video of the top track.
 # LASTFM_USER is optional and defaults to scotty-bob.
 # Set secrets with: npx wrangler secret put <NAME>
 [vars]
