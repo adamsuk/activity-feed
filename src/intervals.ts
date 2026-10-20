@@ -1,4 +1,5 @@
 import { accountsFromEnv, binding, secretName } from "./accounts.ts";
+import { routeFromLatLngs, sanitizeFeatured, type Featured, type FeaturedRoute } from "./featured.ts";
 import type { Provider } from "./provider.ts";
 import { sourceBlock, type SourceBlock } from "./source.ts";
 import { sanitizeActivities, toPublicFeed } from "./strava.ts";
@@ -66,6 +67,37 @@ async function pull(account: Resolved, fetchImpl: FetchImpl): Promise<CachedActi
   return activities.map((activity) => ({ ...activity, account: account.label }));
 }
 
+/** GPS for one activity, reduced straight away to a shape. Indoor sessions have none. */
+async function loadRoute(account: Resolved, id: string, fetchImpl: FetchImpl): Promise<FeaturedRoute | undefined> {
+  if (!/^i?\d{1,20}$/.test(id)) return undefined;
+  try {
+    const res = await fetchImpl(`https://intervals.icu/api/v1/activity/${id}/map`, {
+      headers: { Authorization: `Basic ${btoa(`API_KEY:${account.apiKey}`)}` },
+    });
+    if (!res.ok) return undefined;
+    const body = (await res.json()) as Record<string, unknown> | null;
+    return routeFromLatLngs(body?.latlngs);
+  } catch {
+    return undefined;
+  }
+}
+
+function featuredActivity(activity: CachedActivity, route: unknown): Featured | null {
+  const shape = route && typeof route === "object" ? route : undefined;
+  const details = [formatDistance(activity.distanceM), formatMoving(activity.movingS)];
+  if (activity.elevationM > 0) details.push(`${activity.elevationM} m up`);
+  return sanitizeFeatured({
+    heading: "Latest activity",
+    title: activity.name,
+    subtitle: [sessionLabel(activity), formatWhen(activity.start)].filter(Boolean).join(" · "),
+    description: shape ? "" : "No GPS map for this session.",
+    url: activity.url,
+    image: "",
+    details,
+    route: shape,
+  });
+}
+
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 function formatDistance(metres: number): string {
@@ -121,6 +153,11 @@ export function toPublicIntervals(value: unknown, now = Date.now()): SourceBlock
   const distanceM = week.reduce((sum, activity) => sum + activity.distanceM, 0);
   const movingS = week.reduce((sum, activity) => sum + activity.movingS, 0);
   const sessions = week.length === 1 ? "session" : "sessions";
+  const latest = feed.activities[0];
+  const cachedRoute = row?.latestRoute as Record<string, unknown> | undefined;
+  const featured = latest
+    ? featuredActivity(latest, cachedRoute?.id === latest.id ? cachedRoute.route : undefined)
+    : null;
   return {
     label: "Training",
     profileUrl: "https://intervals.icu/",
@@ -132,6 +169,7 @@ export function toPublicIntervals(value: unknown, now = Date.now()): SourceBlock
       url: activity.url,
     })),
     updatedAt: feed.updatedAt,
+    ...(featured ? { featured } : {}),
   };
 }
 
@@ -145,16 +183,22 @@ export const intervalsProvider: Provider = {
     if (accounts.length === 0) throw new Error("Intervals.icu API key is not set");
     const showLabel = accounts.length > 1;
     const activities: CachedActivity[] = [];
+    const owner = new Map<string, Resolved>();
     for (const account of accounts) {
       const rows = await pull(showLabel ? account : { ...account, label: "" }, fetchImpl);
+      for (const row of rows) owner.set(row.id, account);
       activities.push(...rows);
     }
     activities.sort((left, right) => (left.start < right.start ? 1 : left.start > right.start ? -1 : 0));
+    const latest = activities[0];
+    const latestAccount = latest ? owner.get(latest.id) : undefined;
+    const route = latest && latestAccount ? await loadRoute(latestAccount, latest.id, fetchImpl) : undefined;
     return {
       source: "intervals",
       updatedAt: new Date().toISOString(),
       stale: false,
       activities: activities.slice(0, 30),
+      ...(latest && route ? { latestRoute: { id: latest.id, route } } : {}),
     };
   },
   publish(_env, value) {

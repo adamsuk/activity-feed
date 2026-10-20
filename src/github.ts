@@ -1,6 +1,7 @@
 import { accountsFromEnv, binding, secretName } from "./accounts.ts";
 import type { Account } from "./accounts.ts";
 import type { Provider } from "./provider.ts";
+import { plainText, sanitizeFeatured, type Featured } from "./featured.ts";
 import type { SourceBlock } from "./source.ts";
 import type { Env, GithubAccount } from "./types.ts";
 
@@ -50,6 +51,106 @@ const VIEWER_QUERY = `query($from: DateTime!, $to: DateTime!) {
     contributionsCollection(from: $from, to: $to) { ${FIELDS} }
   }
 }`;
+
+const LATEST_PR_QUERY = `query($login: String!) {
+  user(login: $login) {
+    pullRequests(first: 10, orderBy: { field: CREATED_AT, direction: DESC }) {
+      nodes {
+        title body url number state isDraft createdAt mergedAt
+        repository { nameWithOwner isPrivate }
+      }
+    }
+  }
+}`;
+
+export type LatestPr = {
+  title: string;
+  body: string;
+  url: string;
+  number: number;
+  repo: string;
+  state: "Open" | "Draft" | "Merged" | "Closed";
+  at: string;
+};
+
+export function latestPrFromJson(body: unknown): LatestPr | null {
+  const nodes = (body as { data?: { user?: { pullRequests?: { nodes?: unknown } } } })
+    ?.data?.user?.pullRequests?.nodes;
+  if (!Array.isArray(nodes)) return null;
+  for (const item of nodes) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, unknown>;
+    const repository = (row.repository ?? {}) as Record<string, unknown>;
+    // Private repositories never reach the public feed.
+    if (repository.isPrivate !== false) continue;
+    const repo = typeof repository.nameWithOwner === "string" ? repository.nameWithOwner : "";
+    const url = typeof row.url === "string" ? row.url : "";
+    if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !url.startsWith(`https://github.com/${repo}/pull/`)) continue;
+    const title = typeof row.title === "string" ? row.title.trim().slice(0, 160) : "";
+    if (!title) continue;
+    const state = row.state === "MERGED" ? "Merged" : row.state === "CLOSED" ? "Closed" : row.isDraft === true ? "Draft" : "Open";
+    return {
+      title,
+      body: plainText(row.body, 240),
+      url,
+      number: Number.isSafeInteger(row.number) ? (row.number as number) : 0,
+      repo,
+      state,
+      at: typeof row.mergedAt === "string" && row.mergedAt ? row.mergedAt : typeof row.createdAt === "string" ? row.createdAt : "",
+    };
+  }
+  return null;
+}
+
+/** The newest public PR by the first account. A failure only drops the card. */
+export async function loadLatestPr(env: Env, fetchImpl: FetchImpl): Promise<LatestPr | null> {
+  const account = githubAccounts(env)[0];
+  if (!account) return null;
+  const token = cleanToken(binding(env, secretName("GITHUB_TOKEN", account.id)));
+  if (!token) return null;
+  try {
+    const res = await fetchImpl(GITHUB_GRAPHQL, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": "sradams-activity-feed",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ query: LATEST_PR_QUERY, variables: { login: account.login } }),
+    });
+    if (!res.ok) return null;
+    return latestPrFromJson(await res.json());
+  } catch {
+    return null;
+  }
+}
+
+function shortDate(at: string): string {
+  const parsed = Date.parse(at);
+  if (!Number.isFinite(parsed)) return "";
+  return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", timeZone: "Europe/London" }).format(parsed);
+}
+
+export function featuredPr(value: unknown): Featured | null {
+  if (!value || typeof value !== "object") return null;
+  const pr = value as Record<string, unknown>;
+  const url = typeof pr.url === "string" && pr.url.startsWith("https://github.com/") ? pr.url : "";
+  if (!url) return null;
+  const repo = typeof pr.repo === "string" ? pr.repo : "";
+  const number = typeof pr.number === "number" && pr.number > 0 ? ` #${pr.number}` : "";
+  const state = typeof pr.state === "string" ? pr.state : "";
+  const when = typeof pr.at === "string" ? shortDate(pr.at) : "";
+  return sanitizeFeatured({
+    heading: "Latest PR",
+    title: pr.title,
+    subtitle: `${repo}${number}`,
+    description: pr.body,
+    url,
+    image: "",
+    details: [state, when ? `${state === "Merged" ? "Merged" : "Opened"} ${when}` : ""],
+  });
+}
 
 export function cleanToken(value: string | undefined): string | null {
   let token = (value || "").trim();
@@ -188,6 +289,7 @@ export function toPublicGithub(value: unknown, allowed: Account[]): SourceBlock 
   }
   const first = accounts[0];
   if (!first) return null;
+  const featured = featuredPr(row.latestPr);
   return {
     label: "GitHub",
     profileUrl: `https://github.com/${first.login}`,
@@ -200,6 +302,7 @@ export function toPublicGithub(value: unknown, allowed: Account[]): SourceBlock 
       url: `https://github.com/${account.login}`,
     })),
     updatedAt: typeof row.updatedAt === "string" ? row.updatedAt : null,
+    ...(featured ? { featured } : {}),
   };
 }
 
@@ -213,6 +316,7 @@ export const githubProvider: Provider = {
       updatedAt: new Date(now).toISOString(),
       stale: false,
       accounts: await loadGithubAccounts(env, fetchImpl, now),
+      latestPr: await loadLatestPr(env, fetchImpl),
     };
   },
   publish(env, value) {

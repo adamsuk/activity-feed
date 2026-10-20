@@ -1,3 +1,5 @@
+import { sanitizeFeatured, type Featured } from "./featured.ts";
+
 /** The same block for every provider. The homepage renders this and nothing source-specific. */
 export type SourceActivity = {
   label: string;
@@ -14,6 +16,8 @@ export type SourceBlock = {
   summary: string;
   activity: SourceActivity[];
   updatedAt: string | null;
+  /** Optional card shown beside the metrics. Older consumers ignore it. */
+  featured?: Featured;
 };
 
 function clean(value: unknown, max: number): string {
@@ -54,5 +58,7 @@ export function sourceBlock(value: unknown): SourceBlock | null {
     updatedAt: typeof row.updatedAt === "string" ? row.updatedAt : null,
   };
   if (row.fallbackPicture === true) block.fallbackPicture = true;
+  const featured = sanitizeFeatured(row.featured);
+  if (featured) block.featured = featured;
   return block;
 }

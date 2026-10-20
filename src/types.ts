@@ -68,6 +68,8 @@ export interface Env {
   GOODREADS_ACCOUNTS?: string;
   /** Secret. Without it the Last.fm source is skipped. */
   LASTFM_API_KEY?: string;
+  /** Optional secret. Lets the Last.fm card embed a YouTube video of the top track. */
+  YOUTUBE_API_KEY?: string;
   /** Last.fm username. Defaults to scotty-bob. */
   LASTFM_USER?: string;
 }

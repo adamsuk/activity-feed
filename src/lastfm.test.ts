@@ -84,3 +84,49 @@ test("empty listening still shows the source with its picture", () => {
   assert.equal(block.profilePicture, LASTFM_PICTURE);
   assert.equal(toPublicLastfm({ activity: [] }, "scotty-bob"), null);
 });
+
+const ALBUM_IMAGES = [
+  { size: "small", "#text": "https://lastfm.freetls.fastly.net/i/u/34s/abc.png" },
+  { size: "extralarge", "#text": "https://lastfm.freetls.fastly.net/i/u/300x300/abc.png" },
+];
+
+test("the top album is featured with its artwork and the top track as a link", async () => {
+  const responses = { ...RESPONSES, "user.gettopalbums": { topalbums: { album: [{ name: "Big Album", playcount: "12", artist: { name: "Band" }, url: "https://www.last.fm/music/Band/Big+Album", image: ALBUM_IMAGES }] } } };
+  const block = await refresh(env(), lastfmProvider, async (input) => {
+    const url = new URL(String(input));
+    return Response.json((responses as Record<string, unknown>)[url.searchParams.get("method") ?? ""] ?? { error: 6 });
+  }, NOW) as { featured?: Record<string, unknown> };
+  const featured = block.featured as { heading: string; title: string; subtitle: string; image: string; details: string[]; link?: { label: string; detail: string; url: string }; video?: unknown };
+  assert.equal(featured.heading, "Top album this week");
+  assert.equal(featured.title, "Big Album");
+  assert.equal(featured.subtitle, "Band");
+  assert.equal(featured.image, "https://lastfm.freetls.fastly.net/i/u/300x300/abc.png");
+  assert.deepEqual(featured.details, ["12 plays"]);
+  assert.deepEqual(featured.link, { label: "Top track · Big Song", detail: "Band · 9 plays", url: "https://www.last.fm/music/Band/_/Big+Song" });
+  assert.equal(featured.video, undefined);
+});
+
+test("with a YouTube key the top track gets one cached video id", async () => {
+  const e = env({ YOUTUBE_API_KEY: "yt-key" });
+  let searches = 0;
+  const fetchImpl = async (input: RequestInfo | URL) => {
+    const url = new URL(String(input));
+    if (url.hostname === "www.googleapis.com") {
+      searches += 1;
+      assert.equal(url.searchParams.get("q"), "Band Big Song");
+      return Response.json({ items: [{ id: { videoId: "dQw4w9WgXcQ" } }] });
+    }
+    return Response.json(RESPONSES[url.searchParams.get("method") ?? ""] ?? { error: 6 });
+  };
+  const first = await refresh(e, lastfmProvider, fetchImpl, NOW) as { featured?: { video?: { youtubeId: string } } };
+  assert.equal(first.featured?.video?.youtubeId, "dQw4w9WgXcQ");
+  await refresh(e, lastfmProvider, fetchImpl, NOW);
+  assert.equal(searches, 1);
+  assert.equal(((await e.FEED.get("lastfm")) ?? "").includes("yt-key"), false);
+});
+
+test("placeholder artwork is ignored", async () => {
+  const { imageFromJson } = await import("./lastfm.ts");
+  assert.equal(imageFromJson([{ size: "extralarge", "#text": "https://lastfm.freetls.fastly.net/i/u/300x300/2a96cbd8b46e442fc41c2b86b821562f.png" }]), "");
+  assert.equal(imageFromJson([{ size: "extralarge", "#text": "https://evil.example/a.png" }]), "");
+});
