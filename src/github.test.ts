@@ -222,7 +222,7 @@ test("a block-shaped cache is not published unfiltered", () => {
 test("the latest public PR becomes the featured card; private repos are skipped", async () => {
   const body = { data: { user: { pullRequests: { nodes: [
     { title: "Secret", body: "", url: "https://github.com/acme/private/pull/1", number: 1, state: "OPEN", isDraft: false, createdAt: "2026-10-19T10:00:00Z", mergedAt: null, repository: { nameWithOwner: "acme/private", isPrivate: true } },
-    { title: "Add featured items", body: "## Why\n\nShow a **card** per source. See [docs](https://x.example).\n\n```ts\ncode()\n```", url: "https://github.com/adamsuk/activity-feed/pull/9", number: 9, state: "MERGED", isDraft: false, createdAt: "2026-10-18T10:00:00Z", mergedAt: "2026-10-19T09:00:00Z", repository: { nameWithOwner: "adamsuk/activity-feed", isPrivate: false } },
+    { title: "Add featured items", body: "Closes #4. Fixes adamsuk/x#5\n\n## Why\n\nShow a **card** per source. See [docs](https://x.example).\n\n```ts\ncode()\n```", url: "https://github.com/adamsuk/activity-feed/pull/9", number: 9, state: "MERGED", isDraft: false, createdAt: "2026-10-18T10:00:00Z", mergedAt: "2026-10-19T09:00:00Z", repository: { nameWithOwner: "adamsuk/activity-feed", isPrivate: false } },
   ] } } } };
   const pr = latestPrFromJson(body);
   assert.ok(pr);
