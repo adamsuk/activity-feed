@@ -6,8 +6,6 @@ import type { Env } from "./types.ts";
 const API = "https://ws.audioscrobbler.com/2.0/";
 const WEEK_S = 7 * 24 * 60 * 60;
 export const LASTFM_DEFAULT_USER = "scotty-bob";
-/** Raw Last.fm avatar; may change, so the site falls back to GitHub. */
-export const LASTFM_PICTURE = "https://lastfm-img.freetls.fastly.net/i/u/avatar170s/dab58fd0450ba281006e849c2088c214.png";
 
 function clean(value: unknown, max: number): string {
   if (typeof value !== "string") return "";
@@ -71,18 +69,23 @@ type Top = { name: string; artist: string; url: string; plays: number; image?: s
 /** Last.fm's grey star, served when it has no real artwork. */
 const PLACEHOLDER = "2a96cbd8b46e442fc41c2b86b821562f";
 
+/** https image on fastly.net, last.fm, or lst.fm, excluding the grey-star placeholder. */
+function lastfmImageUrl(value: unknown): string {
+  if (typeof value !== "string" || !value || value.includes(PLACEHOLDER)) return "";
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol === "https:" && /(^|\.)(fastly\.net|last\.fm|lst\.fm)$/.test(parsed.hostname)) return parsed.toString();
+  } catch {
+    // not a usable image url
+  }
+  return "";
+}
+
 export function imageFromJson(value: unknown): string {
   const images = list(value);
   for (const size of ["extralarge", "large", "medium"]) {
-    const found = images.find((image) => image.size === size);
-    const url = typeof found?.["#text"] === "string" ? found["#text"] : "";
-    if (!url || url.includes(PLACEHOLDER)) continue;
-    try {
-      const parsed = new URL(url);
-      if (parsed.protocol === "https:" && /(^|\.)(fastly\.net|last\.fm|lst\.fm)$/.test(parsed.hostname)) return parsed.toString();
-    } catch {
-      // try the next size
-    }
+    const url = lastfmImageUrl(images.find((image) => image.size === size)?.["#text"]);
+    if (url) return url;
   }
   return "";
 }
@@ -266,12 +269,24 @@ export function toPublicLastfm(value: unknown, user: string): SourceBlock | null
   return {
     label: "Music",
     profileUrl: `https://www.last.fm/user/${user}`,
-    profilePicture: LASTFM_PICTURE,
+    profilePicture: lastfmImageUrl(row.profilePicture),
     summary: scrobbles ? `${scrobbles === 1 ? "1 scrobble" : `${scrobbles} scrobbles`} this week` : "",
     activity,
     updatedAt: typeof row.updatedAt === "string" ? row.updatedAt : null,
     ...(featured ? { featured } : {}),
   };
+}
+
+/** Avatar from user.getInfo. Charts omit it. Empty when the call fails or the image is unusable. */
+async function userPicture(env: Env, fetchImpl: typeof fetch): Promise<string> {
+  try {
+    const body = await call("user.getInfo", {}, env, fetchImpl);
+    const user = body.user;
+    if (!user || typeof user !== "object") return "";
+    return imageFromJson((user as Record<string, unknown>).image);
+  } catch {
+    return "";
+  }
 }
 
 export const lastfmProvider: Provider = {
@@ -286,10 +301,12 @@ export const lastfmProvider: Provider = {
     const topTrack = topFromJson(await call("user.gettoptracks", week, env, fetchImpl), "toptracks", "track");
     const topAlbum = topFromJson(await call("user.gettopalbums", week, env, fetchImpl), "topalbums", "album");
     const topArtist = topFromJson(await call("user.gettopartists", week, env, fetchImpl), "topartists", "artist");
+    const profilePicture = await userPicture(env, fetchImpl);
     const video = await loadVideo(env, topTrack, fetchImpl);
     return {
       updatedAt: new Date(now).toISOString(),
       stale: false,
+      profilePicture,
       recent: recent.tracks,
       scrobbles: recent.scrobbles,
       topTrack,
