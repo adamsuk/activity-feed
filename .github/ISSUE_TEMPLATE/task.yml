@@ -3,6 +3,15 @@ name: Task
 description: A change to make, with clear acceptance criteria
 body:
   - type: textarea
+    id: target
+    attributes:
+      label: Target repository
+      description: The one repository this change lands in. Replace owner/repo and leave a single line.
+      value: |
+        Target repo: owner/repo
+    validations:
+      required: true
+  - type: textarea
     id: problem
     attributes:
       label: Problem
