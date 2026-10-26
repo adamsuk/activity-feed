@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { refresh } from "./index.ts";
-import { LASTFM_PICTURE, lastfmProvider, lastfmUser, toPublicLastfm } from "./lastfm.ts";
+import { lastfmProvider, lastfmUser, toPublicLastfm } from "./lastfm.ts";
 import { MemoryKv } from "./memory-kv.ts";
 import type { Env } from "./types.ts";
 
@@ -54,12 +54,12 @@ test("last.fm publishes latest track, weekly tops and scrobble count", async () 
   const e = env();
   const block = await refresh(e, lastfmProvider, fetchMock(calls), NOW);
   assert.ok(block);
-  assert.equal(calls.length, 4);
+  assert.equal(calls.length, 5);
   assert.ok(calls.every((url) => url.searchParams.get("user") === "scotty-bob" && url.searchParams.get("format") === "json"));
   assert.equal(calls[1].searchParams.get("period"), "7day");
   assert.equal(calls[0].searchParams.get("from"), String(NOW / 1000 - 7 * 24 * 3600));
   assert.equal(block.label, "Music");
-  assert.equal(block.profilePicture, LASTFM_PICTURE);
+  assert.equal(block.profilePicture, "");
   assert.equal(block.profileUrl, "https://www.last.fm/user/scotty-bob");
   assert.equal(block.summary, "42 scrobbles this week");
   assert.deepEqual(block.activity, [
@@ -76,12 +76,12 @@ test("an API error does not publish a section", async () => {
   await assert.rejects(refresh(env(), lastfmProvider, async () => Response.json({ error: 10, message: "Invalid API key" }), NOW));
 });
 
-test("empty listening still shows the source with its picture", () => {
+test("empty listening still shows the source", () => {
   const block = toPublicLastfm({ recent: [], scrobbles: 0, topTrack: null, updatedAt: null }, "scotty-bob");
   assert.ok(block);
   assert.deepEqual(block.activity, []);
   assert.equal(block.summary, "");
-  assert.equal(block.profilePicture, LASTFM_PICTURE);
+  assert.equal(block.profilePicture, "");
   assert.equal(toPublicLastfm({ activity: [] }, "scotty-bob"), null);
 });
 
@@ -129,4 +129,57 @@ test("placeholder artwork is ignored", async () => {
   const { imageFromJson } = await import("./lastfm.ts");
   assert.equal(imageFromJson([{ size: "extralarge", "#text": "https://lastfm.freetls.fastly.net/i/u/300x300/2a96cbd8b46e442fc41c2b86b821562f.png" }]), "");
   assert.equal(imageFromJson([{ size: "extralarge", "#text": "https://evil.example/a.png" }]), "");
+});
+
+test("the profile picture comes from the current user.getInfo image", async () => {
+  const picture = "https://lastfm.freetls.fastly.net/i/u/300x300/9f3c1a0e7b2d4c88a1e0.png";
+  const calls: string[] = [];
+  const responses: Record<string, unknown> = {
+    ...RESPONSES,
+    "user.getInfo": {
+      user: {
+        image: [
+          { size: "medium", "#text": "https://lastfm.freetls.fastly.net/i/u/64s/9f3c1a0e7b2d4c88a1e0.png" },
+          { size: "extralarge", "#text": picture },
+        ],
+      },
+    },
+  };
+  const block = await refresh(env(), lastfmProvider, async (input) => {
+    const url = new URL(String(input));
+    const method = url.searchParams.get("method") ?? "";
+    calls.push(method);
+    return Response.json(responses[method] ?? { error: 6 });
+  }, NOW);
+  assert.ok(calls.includes("user.getInfo"));
+  assert.equal(block?.profilePicture, picture);
+});
+
+test("an unusable or failed user.getInfo image publishes an empty profile picture", async () => {
+  const fetchInfo = (info: Response | Record<string, unknown>) => async (input: RequestInfo | URL) => {
+    const url = new URL(String(input));
+    const method = url.searchParams.get("method") ?? "";
+    if (method === "user.getInfo") return info instanceof Response ? info : Response.json(info);
+    return Response.json(RESPONSES[method] ?? { error: 6 });
+  };
+  const greyStar = "https://lastfm.freetls.fastly.net/i/u/300x300/2a96cbd8b46e442fc41c2b86b821562f.png";
+  const placeholder = await refresh(env(), lastfmProvider, fetchInfo({
+    user: { image: [{ size: "extralarge", "#text": greyStar }] },
+  }), NOW);
+  assert.equal(placeholder?.profilePicture, "");
+
+  const offHost = await refresh(env(), lastfmProvider, fetchInfo({
+    user: { image: [{ size: "extralarge", "#text": "https://evil.example/avatar.png" }] },
+  }), NOW);
+  assert.equal(offHost?.profilePicture, "");
+
+  const insecure = await refresh(env(), lastfmProvider, fetchInfo({
+    user: { image: [{ size: "extralarge", "#text": "http://lastfm.freetls.fastly.net/i/u/300x300/abc.png" }] },
+  }), NOW);
+  assert.equal(insecure?.profilePicture, "");
+
+  const failed = await refresh(env(), lastfmProvider, fetchInfo(new Response("down", { status: 503 })), NOW);
+  assert.ok(failed);
+  assert.equal(failed.profilePicture, "");
+  assert.equal(failed.summary, "42 scrobbles this week");
 });
