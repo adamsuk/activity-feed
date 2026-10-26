@@ -1,0 +1,28 @@
+# factory-managed: maintained by https://github.com/adamsuk/gh-factory. Remove this line to take ownership.
+version: 2
+updates:
+- package-ecosystem: npm
+  directories:
+  - /
+  schedule:
+    interval: weekly
+  labels:
+  - dependencies
+  groups:
+    minor-and-patch:
+      update-types:
+      - minor
+      - patch
+- package-ecosystem: github-actions
+  directories:
+  - /
+  schedule:
+    interval: weekly
+  labels:
+  - dependencies
+  - github_actions
+  groups:
+    minor-and-patch:
+      update-types:
+      - minor
+      - patch

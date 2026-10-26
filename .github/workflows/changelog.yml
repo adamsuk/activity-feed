@@ -1,0 +1,15 @@
+# factory-managed: maintained by https://github.com/adamsuk/gh-factory. Remove this line to take ownership.
+name: Changelog
+
+# Fails a pull request that does not update CHANGELOG.md, unless it has the skip-changelog label.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  changelog:
+    uses: adamsuk/gh-factory/.github/workflows/changelog.yml@283fa179145dab3b40dbb4b2100fcb50910d7eb1 # main

@@ -1,0 +1,34 @@
+# factory-managed: maintained by https://github.com/adamsuk/gh-factory. Remove this line to take ownership.
+name: Task
+description: A change to make, with clear acceptance criteria
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is wrong or missing, and who it affects.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should change. Leave room for the implementer to choose how.
+    validations:
+      required: false
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: How we know it is done. One checkable item per line.
+      placeholder: |
+        - [ ] The thing works as described
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Links, screenshots, logs.
+    validations:
+      required: false
