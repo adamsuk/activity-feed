@@ -3,8 +3,8 @@ import type { Provider } from "./provider.ts";
 import type { SourceBlock } from "./source.ts";
 import type { Env } from "./types.ts";
 
-const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-const SHELVES = ["read", "currently-reading"] as const;
+// The read shelf and its week window are gone with the RSS feed: Goodreads
+// only exposes currently-reading anonymously now. See booksFromProfile.
 
 export type GoodreadsAccount = {
   id: string;
@@ -31,16 +31,12 @@ function decode(value: string): string {
   return value
     .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) => String.fromCodePoint(parseInt(hex, 16)))
     .replace(/&#(\d+);/g, (_, digits: string) => String.fromCodePoint(Number(digits)))
-    .replace(/</g, "<")
-    .replace(/>/g, ">")
-    .replace(/"/g, "\"")
-    .replace(/'/g, "'")
-    .replace(/&/g, "&");
-}
-
-function tag(item: string, name: string): string {
-  const match = item.match(new RegExp(`<${name}>(?:<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>|([^<]*))</${name}>`));
-  return decode((match?.[1] ?? match?.[2] ?? "").trim());
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&apos;/g, "'")
+    // Last, so an entity written &amp;lt; does not decode twice.
+    .replace(/&amp;/g, "&");
 }
 
 function coverUrl(value: string): string {
@@ -85,62 +81,65 @@ export function goodreadsAccounts(env: Env): GoodreadsAccount[] {
 
 type Parsed = GoodreadsBook & { bookId: string };
 
-export function booksFromRss(xml: string, shelf: "read" | "currently-reading", now: number): Parsed[] {
-  const since = now - WEEK_MS;
-  const reading: Parsed[] = [];
-  const finished: Array<Parsed & { readAt: number }> = [];
-  for (const item of xml.split("<item>").slice(1)) {
-    const body = item.split("</item>")[0];
-    const title = clean(tag(body, "title"), 180);
-    const bookId = tag(body, "book_id");
-    if (!title || !bookUrl(bookId)) continue;
-    const readAt = Date.parse(tag(body, "user_read_at"));
-    const addedAt = Date.parse(tag(body, "user_date_added"));
-    const rating = Number(tag(body, "user_rating"));
-    const book: Parsed = {
-      bookId,
-      title,
-      author: clean(tag(body, "author_name"), 120),
-      status: shelf === "read" ? "finished" : "reading",
-      at: null,
-      rating: Number.isInteger(rating) && rating >= 1 && rating <= 5 ? rating : 0,
-      url: bookUrl(bookId),
-      cover: coverUrl(tag(body, "book_large_image_url")) || coverUrl(tag(body, "book_medium_image_url")),
-    };
-    if (shelf === "currently-reading") {
-      book.at = Number.isFinite(addedAt) ? new Date(addedAt).toISOString() : null;
-      reading.push(book);
-      continue;
-    }
-    if (!Number.isFinite(readAt)) continue;
-    book.at = new Date(readAt).toISOString();
-    finished.push({ ...book, readAt });
-  }
-  if (shelf === "currently-reading") return reading;
-  finished.sort((left, right) => right.readAt - left.readAt);
-  return finished
-    .filter((book, index) => index === 0 || book.readAt >= since)
-    .map(({ readAt: _readAt, ...book }) => book);
+/** Text of the first `<a class="NAME" ...>text</a>` in a row. */
+function anchorText(row: string, name: string): string {
+  const match = row.match(new RegExp(`<a[^>]*class="${name}"[^>]*>([\\s\\S]*?)</a>`));
+  return decode((match?.[1] ?? "").replace(/<[^>]+>/g, " ").trim());
 }
 
-async function shelf(
-  userId: string,
-  name: "read" | "currently-reading",
-  fetchImpl: typeof fetch,
-  now: number,
-): Promise<Parsed[]> {
-  const url = new URL("https://www.goodreads.com/review/list_rss/" + userId);
-  url.searchParams.set("shelf", name);
-  url.searchParams.set("per_page", "50");
-  url.searchParams.set("sort", name === "read" ? "date_read" : "date_added");
-  url.searchParams.set("order", "d");
-  const response = await fetchImpl(url, {
-    headers: { "User-Agent": "sradams-activity-feed", Accept: "application/rss+xml, application/xml" },
+/**
+ * The books on the public profile's "currently reading" block.
+ *
+ * Goodreads ended anonymous access to /review/list and its list_rss feed, which
+ * is what this provider used to read: every form of
+ * `review/list_rss/<id>?shelf=...` now answers 404 with
+ * `<error>Page not found</error>`, and /review/list redirects to /user/sign_in.
+ * The profile page is still public, so currently-reading is still readable.
+ *
+ * The read shelf is not. Its dates and ratings live behind that sign-in, so
+ * finished books have no source and this returns reading only. `status` keeps
+ * both values because the publish side still renders a cached "finished" book.
+ */
+export function booksFromProfile(html: string, _now: number): Parsed[] {
+  const start = html.indexOf('id="currentlyReadingReviews"');
+  if (start === -1) return [];
+  const block = html.slice(start, start + 20_000);
+  const books: Parsed[] = [];
+  for (const row of block.split('class="Updates').slice(1)) {
+    const bookId = row.match(/\/book\/show\/(\d{1,12})/)?.[1] ?? "";
+    const title = clean(anchorText(row, "bookTitle"), 180);
+    if (!title || !bookUrl(bookId)) continue;
+    books.push({
+      bookId,
+      title,
+      author: clean(anchorText(row, "authorName"), 120),
+      status: "reading",
+      // The profile shows no date for a current read, so there is nothing
+      // honest to put here. bookValue() renders a bare "Reading" for null.
+      at: null,
+      // Nor a rating: you rate a book when you finish it.
+      rating: 0,
+      url: bookUrl(bookId),
+      cover: coverUrl(row.match(/src="(https:\/\/[^"]*gr-assets\.com\/[^"]+)"/)?.[1] ?? ""),
+    });
+    if (books.length === 20) break;
+  }
+  return books;
+}
+
+/** The public profile page, once. It carries the books and the avatar. */
+async function profile(userId: string, fetchImpl: typeof fetch): Promise<string> {
+  const response = await fetchImpl(`https://www.goodreads.com/user/show/${userId}`, {
+    headers: { "User-Agent": "sradams-activity-feed", Accept: "text/html" },
   });
-  if (!response.ok) throw new Error(`Goodreads ${name} failed (${response.status})`);
-  const xml = await response.text();
-  if (!xml.includes("<rss")) throw new Error(`Goodreads ${name} was not a feed`);
-  return booksFromRss(xml, name, now);
+  if (!response.ok) throw new Error(`Goodreads profile failed (${response.status})`);
+  const html = await response.text();
+  // A signed-out /review/list redirects here, so check we got a profile and not
+  // the sign-in page before reading books out of it.
+  if (!html.includes('id="currentlyReadingReviews"') && !html.includes("og:image")) {
+    throw new Error("Goodreads profile was not a profile page");
+  }
+  return html.slice(0, 400_000);
 }
 
 function dedupe(books: Parsed[]): Parsed[] {
@@ -165,18 +164,10 @@ function bookValue(status: "reading" | "finished", at: string | null): string {
 /** Raw Goodreads image used when the profile scrape finds none; may change, so the site falls back to GitHub. */
 export const GOODREADS_PICTURE = "https://images.gr-assets.com/users/1792145984p8/176915360.jpg";
 
-async function profilePicture(userId: string, fetchImpl: typeof fetch): Promise<string> {
-  try {
-    const response = await fetchImpl(`https://www.goodreads.com/user/show/${userId}`, {
-      headers: { "User-Agent": "sradams-activity-feed", Accept: "text/html" },
-    });
-    if (!response.ok) return "";
-    const html = (await response.text()).slice(0, 100_000);
-    const match = html.match(/property="og:image" content="(https:\/\/images\.gr-assets\.com\/users\/[^"]+)"/);
-    return match?.[1] ?? "";
-  } catch {
-    return "";
-  }
+/** The avatar, read from the profile HTML already fetched. */
+export function pictureFromProfile(html: string): string {
+  const match = html.match(/property="og:image" content="(https:\/\/images\.gr-assets\.com\/users\/[^"]+)"/);
+  return match?.[1] ?? "";
 }
 
 function featuredBook(book: Record<string, unknown>, title: string, url: string, status: string, at: string | null): Featured | null {
@@ -243,20 +234,22 @@ export const goodreadsProvider: Provider = {
   async load(env, fetchImpl, now = Date.now()) {
     const accounts = goodreadsAccounts(env);
     const books: Array<GoodreadsBook & { accountId: string }> = [];
-    for (const account of accounts) {
-      const finished = await shelf(account.userId, "read", fetchImpl, now);
-      const reading = await shelf(account.userId, "currently-reading", fetchImpl, now);
-      const rows = dedupe([...finished, ...reading]).slice(0, 20);
+    // One request per account now, not three: the profile page carries the
+    // books and the avatar, and the two shelf feeds it used to read are gone.
+    let picture = "";
+    for (const [index, account] of accounts.entries()) {
+      const html = await profile(account.userId, fetchImpl);
+      if (index === 0) picture = pictureFromProfile(html);
+      const rows = dedupe(booksFromProfile(html, now)).slice(0, 20);
       for (const { bookId: _bookId, ...book } of rows) {
         books.push({ ...book, accountId: account.id });
       }
     }
     books.sort((left, right) => (right.at || "").localeCompare(left.at || ""));
-    const first = accounts[0];
     return {
       updatedAt: new Date(now).toISOString(),
       stale: false,
-      profilePicture: first ? await profilePicture(first.userId, fetchImpl) : "",
+      profilePicture: picture,
       books: books.slice(0, 20),
     };
   },
