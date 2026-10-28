@@ -16,7 +16,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `.github/factory.yml`, enrolling this repo in the software factory
   (adamsuk/software-factory#151). Without it station 04 could not run here:
   `gate-issue.sh` reads the file from a pull request's base ref, so it has to be
-  on `main`. Grants no new permission — `agents.merge` is `false`.
+  on `main`. Grants no new permission — `agents.merge` is `false`. The file
+  records that `npm test` runs in `deploy.yml` before deploying but on no
+  pull request, so a red test is invisible until after merge.
 
 ## 2026-10-26 (task target)
 

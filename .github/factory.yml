@@ -14,17 +14,27 @@ agents:
   review_bot: coderabbit
   # The repo's own script: node --experimental-strip-types --test src/*.test.ts
   #
-  # Note: no workflow runs it. src/*.test.ts exists and npm test is defined, but
-  # changelog.yml, codeql.yml and deploy.yml do not execute it, so this command
-  # is not currently a CI gate. Same gap as software-factory#135, and it needs
-  # its own ticket.
+  # These tests DO run in CI, but only on the way out: deploy.yml runs the same
+  # command as a "Test" step before the deploy step, on push to main, so a
+  # failing test blocks the deploy. What is missing is a *pull request* test
+  # gate -- no workflow runs them on pull_request, so a red test is invisible
+  # until after merge. Narrower than software-factory#135, and still worth its
+  # own ticket. (An earlier version of this comment said no workflow ran them
+  # at all; CodeRabbit corrected that on activity-feed#20.)
   test_command: npm test
 
-# Read off PR #18 rather than inferred from the workflow files. The full set
-# seen there was: changelog / changelog, Analyze (actions),
-# Analyze (javascript-typescript), CodeQL, CodeRabbit. The Analyze jobs are
-# CodeQL matrix legs, so CodeQL is the one to require. Deploy runs on push to
-# main, not on pull requests, so it is not a pull request check.
+# Read off a real pull request rather than inferred from the workflow files.
+#
+# CodeRabbit argued on activity-feed#20 that "CodeQL" is only a workflow name
+# and that the matrix legs must be required instead. The check-runs API says
+# otherwise: for the head of #20 it returns CodeQL [success] alongside
+# Analyze (actions) [success] and Analyze (javascript-typescript) [success], so
+# CodeQL is a real check run that gate-issue.sh can match. Requiring the
+# aggregate also survives a change to the language matrix, which naming the legs
+# would not.
+#
+# Deploy runs on push to main, not on pull requests, so it is not a pull
+# request check and is not required here.
 required_checks:
   - changelog / changelog
   - CodeQL
