@@ -1,0 +1,30 @@
+# activity-feed's factory enrolment (see adamsuk/gh-factory README, "Per-repo overrides").
+#
+# Added by adamsuk/software-factory#151. Without this file station 04 cannot run
+# here at all: scripts/gate-issue.sh reads it from a pull request's *base* ref,
+# so it has to be on main before any pull request here can be gated.
+
+# Factory agents (see the gh-factory README, "Agents").
+agents:
+  roles: [intake, builder, reviewer]
+  # The documented default. This file grants no new permission: merging here
+  # stays a person's decision until Scott says otherwise.
+  merge: false
+  # .coderabbit.yaml is present and the CodeRabbit check runs on pull requests.
+  review_bot: coderabbit
+  # The repo's own script: node --experimental-strip-types --test src/*.test.ts
+  #
+  # Note: no workflow runs it. src/*.test.ts exists and npm test is defined, but
+  # changelog.yml, codeql.yml and deploy.yml do not execute it, so this command
+  # is not currently a CI gate. Same gap as software-factory#135, and it needs
+  # its own ticket.
+  test_command: npm test
+
+# Read off PR #18 rather than inferred from the workflow files. The full set
+# seen there was: changelog / changelog, Analyze (actions),
+# Analyze (javascript-typescript), CodeQL, CodeRabbit. The Analyze jobs are
+# CodeQL matrix legs, so CodeQL is the one to require. Deploy runs on push to
+# main, not on pull requests, so it is not a pull request check.
+required_checks:
+  - changelog / changelog
+  - CodeQL
