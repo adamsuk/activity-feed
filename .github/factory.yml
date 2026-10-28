@@ -25,16 +25,28 @@ agents:
 
 # Read off a real pull request rather than inferred from the workflow files.
 #
-# CodeRabbit argued on activity-feed#20 that "CodeQL" is only a workflow name
-# and that the matrix legs must be required instead. The check-runs API says
-# otherwise: for the head of #20 it returns CodeQL [success] alongside
-# Analyze (actions) [success] and Analyze (javascript-typescript) [success], so
-# CodeQL is a real check run that gate-issue.sh can match. Requiring the
-# aggregate also survives a change to the language matrix, which naming the legs
-# would not.
+# The CodeQL matrix legs, not the "CodeQL" aggregate.
+#
+# CodeRabbit asked for exactly this on activity-feed#20 and the rebuttal written
+# here was wrong. It cited one check-runs reading, for the head of #20, where
+# the aggregate happened to be success. One sample of a varying value is not
+# evidence. Across two pull requests in this repo:
+#
+#   #20 (6c773b5)  CodeQL: success   Analyze (actions): success   Analyze (javascript-typescript): success
+#   #21 (43b5e7a)  CodeQL: neutral   Analyze (actions): success   Analyze (javascript-typescript): success
+#
+# The aggregate is neutral when the analysis has nothing to do for the changed
+# paths. scripts/gate-issue.sh counts every bucket but pass as red, and neutral
+# surfaces as skipping, so requiring it returned "retry" on #21 with all three
+# CodeQL checks fine. Do not put the aggregate back.
+#
+# The old objection stands but is the lesser problem: naming the legs breaks if
+# someone changes the language matrix. That fails loudly and once; the aggregate
+# failed silently and constantly.
 #
 # Deploy runs on push to main, not on pull requests, so it is not a pull
 # request check and is not required here.
 required_checks:
   - changelog / changelog
-  - CodeQL
+  - Analyze (actions)
+  - Analyze (javascript-typescript)
