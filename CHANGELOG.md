@@ -11,6 +11,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `.github/factory.yml` requires the CodeQL matrix legs, `Analyze (actions)` and
+  `Analyze (javascript-typescript)`, instead of the `CodeQL` aggregate
+  (adamsuk/software-factory#153). The aggregate reports `neutral` when the
+  analysis has nothing to do for the changed paths, and `gate-issue.sh` counts
+  every bucket but `pass` as red, so the gate returned `retry` on #21 while all
+  three CodeQL checks were fine.
+
 ### Added
 
 - `.github/factory.yml`, enrolling this repo in the software factory
