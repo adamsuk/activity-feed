@@ -13,7 +13,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## 2026-10-28 (goodreads)
 
+### Removed
+
+- Finished books, their read dates and their star ratings. Those live on
+  `/review/list?shelf=read`, which now needs a signed-in session, so there is no
+  anonymous source for them. The published block still renders a cached
+  `finished` book, so nothing breaks if one is already stored.
 ### Fixed
+
 
 - Goodreads activity is back in the feed (#19). The provider read
   `review/list_rss`, which Goodreads has retired: every form of it now answers
@@ -27,13 +34,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `decode()` no longer leaves named HTML entities alone. Its `&lt;`, `&gt;`,
   `&quot;`, `&apos;` and `&amp;` replacements had lost their entity text and
   were no-ops, which barely showed with RSS CDATA and matters when reading HTML.
-
-### Removed
-
-- Finished books, their read dates and their star ratings. Those live on
-  `/review/list?shelf=read`, which now needs a signed-in session, so there is no
-  anonymous source for them. The published block still renders a cached
-  `finished` book, so nothing breaks if one is already stored.
+- `.github/factory.yml` requires the CodeQL matrix legs, `Analyze (actions)` and
+  `Analyze (javascript-typescript)`, instead of the `CodeQL` aggregate
+  (adamsuk/software-factory#153). The aggregate reports `neutral` when the
+  analysis has nothing to do for the changed paths, and `gate-issue.sh` counts
+  every bucket but `pass` as red, so the gate returned `retry` on #21 while all
+  three CodeQL checks were fine.
 
 ### Added
 
