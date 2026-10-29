@@ -4,7 +4,9 @@ import type { SourceBlock } from "./source.ts";
 import type { Env } from "./types.ts";
 
 // The read shelf and its week window are gone with the RSS feed: Goodreads
-// only exposes currently-reading anonymously now. See booksFromProfile.
+// only exposes currently-reading anonymously now. See booksFromProfile. The
+// public "Recent Status Updates" page is still anonymous, so progress posts
+// ("on page 469 of 1009") come from there. See statusUpdatesFromPage.
 
 export type GoodreadsAccount = {
   id: string;
@@ -15,7 +17,9 @@ export type GoodreadsAccount = {
 export type GoodreadsBook = {
   title: string;
   author: string;
-  status: "reading" | "finished";
+  status: "reading" | "finished" | "update";
+  /** Only on an "update": what the post said, e.g. "Page 469 of 1009". */
+  progress?: string;
   at: string | null;
   rating: number;
   url: string;
@@ -127,6 +131,71 @@ export function booksFromProfile(html: string, _now: number): Parsed[] {
   return books;
 }
 
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+
+/** "Sep 02, 2026 05:28AM" as ISO. Goodreads gives no zone to a signed-out reader, so UTC. */
+function statusTime(text: string): string | null {
+  const match = text.match(/([A-Za-z]{3})[a-z]* (\d{1,2}), (\d{4}) (\d{1,2}):(\d{2})\s*([AP]M)/i);
+  if (!match) return null;
+  const month = MONTHS.indexOf(match[1].toLowerCase());
+  if (month === -1) return null;
+  const hour = (Number(match[4]) % 12) + (match[6].toUpperCase() === "PM" ? 12 : 0);
+  const time = Date.UTC(Number(match[3]), month, Number(match[2]), hour, Number(match[5]));
+  return Number.isFinite(time) ? new Date(time).toISOString() : null;
+}
+
+/** "on page 469 of 1009" or "45% done" out of a status header; nothing else is kept. */
+function progressText(header: string): string {
+  const page = header.match(/\bon page (\d{1,6})(?: of (\d{1,6}))?/i);
+  if (page) return page[2] ? `Page ${page[1]} of ${page[2]}` : `Page ${page[1]}`;
+  const percent = header.match(/\b(\d{1,3})% (?:done|complete)/i);
+  return percent ? `${percent[1]}% done` : "";
+}
+
+/**
+ * The reader's own status posts from /user_status/list/<id>, newest first.
+ *
+ * Like the profile this needs no sign-in. The free-text body of a post is not
+ * read: the title, the progress and the time are all that is published.
+ */
+export function statusUpdatesFromPage(html: string): GoodreadsBook[] {
+  const updates: GoodreadsBook[] = [];
+  for (const row of html.split('<div id="user_status_').slice(1)) {
+    const header = row.match(/class="[^"]*user_status_header[^"]*"[^>]*>([\s\S]*?)<\/span>/)?.[1] ?? "";
+    const link = header.match(/<a [^>]*href="https:\/\/www\.goodreads\.com\/book\/show\/(\d{1,12})[^"]*"[^>]*>([\s\S]*?)<\/a>/);
+    if (!link) continue;
+    const title = clean(decode(link[2].replace(/<[^>]+>/g, " ")), 180);
+    const url = bookUrl(link[1]);
+    if (!title || !url) continue;
+    const stamp = row.match(/href="\/user_status\/show\/\d+">([^<]+)</)?.[1] ?? "";
+    updates.push({
+      title,
+      author: "",
+      status: "update",
+      progress: progressText(decode(header.replace(/<[^>]+>/g, " "))),
+      at: statusTime(stamp),
+      rating: 0,
+      url,
+      cover: coverUrl(row.match(/class="[^"]*bookCover[^"]*"[\s\S]*?src="(https:\/\/[^"]*gr-assets\.com\/[^"]+)"/)?.[1] ?? ""),
+    });
+    if (updates.length === 10) break;
+  }
+  return updates;
+}
+
+/** The status updates page. Optional: a failure here must not cost the reading list. */
+async function statusPage(userId: string, fetchImpl: typeof fetch): Promise<string> {
+  try {
+    const response = await fetchImpl(`https://www.goodreads.com/user_status/list/${userId}`, {
+      headers: { "User-Agent": "sradams-activity-feed", Accept: "text/html" },
+    });
+    if (!response.ok) return "";
+    return (await response.text()).slice(0, 400_000);
+  } catch {
+    return "";
+  }
+}
+
 /** The public profile page, once. It carries the books and the avatar. */
 async function profile(userId: string, fetchImpl: typeof fetch): Promise<string> {
   const response = await fetchImpl(`https://www.goodreads.com/user/show/${userId}`, {
@@ -153,10 +222,14 @@ function dedupe(books: Parsed[]): Parsed[] {
   return unique;
 }
 
-function bookValue(status: "reading" | "finished", at: string | null): string {
+function bookValue(status: GoodreadsBook["status"], at: string | null, progress = ""): string {
   const when = at && Number.isFinite(Date.parse(at))
     ? new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", timeZone: "Europe/London" }).format(Date.parse(at))
     : "";
+  if (status === "update") {
+    const text = progress || "Update";
+    return when ? `${text} · ${when}` : text;
+  }
   if (status === "reading") return when ? `Reading · ${when}` : "Reading";
   return when ? `Finished · ${when}` : "Finished";
 }
@@ -170,7 +243,7 @@ export function pictureFromProfile(html: string): string {
   return match?.[1] ?? "";
 }
 
-function featuredBook(book: Record<string, unknown>, title: string, url: string, status: string, at: string | null): Featured | null {
+function featuredBook(book: Record<string, unknown>, title: string, url: string, status: "reading" | "finished", at: string | null): Featured | null {
   const cover = typeof book.cover === "string" ? coverUrl(book.cover) : "";
   const rating = typeof book.rating === "number" && book.rating >= 1 && book.rating <= 5 ? book.rating : 0;
   return sanitizeFeatured({
@@ -181,7 +254,7 @@ function featuredBook(book: Record<string, unknown>, title: string, url: string,
     url,
     // Goodreads' "no photo" placeholder is worse than the site's own fallback.
     image: cover.includes("/nophoto/") ? "" : cover,
-    details: [bookValue(status as "reading" | "finished", at), rating ? `${"★".repeat(rating)}${"☆".repeat(5 - rating)}` : ""],
+    details: [bookValue(status, at), rating ? `${"★".repeat(rating)}${"☆".repeat(5 - rating)}` : ""],
   });
 }
 
@@ -202,14 +275,15 @@ export function toPublicGoodreads(value: unknown, accounts: GoodreadsAccount[]):
     const title = typeof book.title === "string" ? clean(book.title, 180) : "";
     const url = typeof book.url === "string" ? book.url : "";
     if (!title || !url.startsWith("https://www.goodreads.com/book/show/")) continue;
-    const status = book.status === "reading" ? "reading" : book.status === "finished" ? "finished" : "";
+    const status = book.status === "reading" || book.status === "finished" || book.status === "update" ? book.status : "";
     if (!status) continue;
     const at = typeof book.at === "string" ? book.at : null;
     const account = showLabel ? labels.get(accountId) : "";
-    if (!featured) featured = featuredBook(book, title, url, status, at);
+    if (!featured && status !== "update") featured = featuredBook(book, title, url, status, at);
+    const progress = typeof book.progress === "string" ? clean(book.progress, 40) : "";
     activity.push({
       label: account ? `${account} · ${title}` : title,
-      value: bookValue(status, at),
+      value: bookValue(status, at, progress),
       url,
     });
     if (activity.length === 20) break;
@@ -234,8 +308,8 @@ export const goodreadsProvider: Provider = {
   async load(env, fetchImpl, now = Date.now()) {
     const accounts = goodreadsAccounts(env);
     const books: Array<GoodreadsBook & { accountId: string }> = [];
-    // One request per account now, not three: the profile page carries the
-    // books and the avatar, and the two shelf feeds it used to read are gone.
+    // Two requests per account: the profile carries the current reads and the
+    // avatar, the status page carries the progress posts.
     let picture = "";
     for (const [index, account] of accounts.entries()) {
       const html = await profile(account.userId, fetchImpl);
@@ -244,13 +318,25 @@ export const goodreadsProvider: Provider = {
       for (const { bookId: _bookId, ...book } of rows) {
         books.push({ ...book, accountId: account.id });
       }
+      for (const update of statusUpdatesFromPage(await statusPage(account.userId, fetchImpl))) {
+        books.push({ ...update, accountId: account.id });
+      }
     }
-    books.sort((left, right) => (right.at || "").localeCompare(left.at || ""));
+    // Updates are dated and current reads are not, so a plain date sort and cap
+    // would let updates push every current read out. Current reads keep their
+    // places first; updates fill what is left.
+    const reads = books.filter((book) => book.status !== "update").slice(0, 20);
+    const updates = books
+      .filter((book) => book.status === "update")
+      .sort((left, right) => (right.at || "").localeCompare(left.at || ""))
+      .slice(0, 20 - reads.length);
+    const kept = [...reads, ...updates];
+    kept.sort((left, right) => (right.at || "").localeCompare(left.at || ""));
     return {
       updatedAt: new Date(now).toISOString(),
       stale: false,
       profilePicture: picture,
-      books: books.slice(0, 20),
+      books: kept,
     };
   },
   publish(env, value) {

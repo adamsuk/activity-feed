@@ -25,7 +25,7 @@ Training activities come from Intervals.icu. The cache has sport, distance, movi
 
 GitHub is the last seven days. The cache stores counts only: contributions, commits, pull requests, reviews, and issues. It does not store repository names or commit messages.
 
-Goodreads is the public shelf RSS, not an API key. It keeps books finished in the last seven days, the most recently finished book, and anything on the currently-reading shelf. It stores the title, author, rating, date, and link. It does not store the review text.
+Goodreads is read from public pages, not an API key: the profile page for the currently-reading books, and the profile's Recent Status Updates page for progress posts ("Page 469 of 1009"). It stores the title, author, progress, date, and link. It does not store review or status text.
 
 ## Accounts
 
@@ -55,7 +55,7 @@ Do not put tokens in git or in the homepage. `keep_vars` is set, so a plain vari
 
 ## Goodreads
 
-Goodreads has no public API. The worker reads the public shelf RSS instead. Set `GOODREADS_ACCOUNTS` to a JSON array. `userId` is the number in your profile URL (`goodreads.com/user/show/12345678`). The read and currently-reading shelves have to be public. There is no secret.
+Goodreads has no public API. The worker reads the public profile and status updates pages instead. Set `GOODREADS_ACCOUNTS` to a JSON array. `userId` is the number in your profile URL (`goodreads.com/user/show/12345678`). The profile has to be public. There is no secret.
 
 ```json
 [

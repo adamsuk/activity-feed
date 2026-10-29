@@ -11,6 +11,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## 2026-10-29 (goodreads)
+
+### Added
+
+- Goodreads status updates (#23). Besides the currently-reading books, the
+  provider reads the public `user_status/list/<id>` page and publishes each
+  progress post ("Page 469 of 1009 · 2 Sep") in the Reading block. The post's
+  free text is not read or stored. One extra request per account; if it fails
+  the reading list is still published. Times on that page carry no zone for a
+  signed-out reader, so they are taken as UTC.
+- The featured card stays a book (currently reading); an update never replaces it.
+- Updates fill the places left after the currently-reading books, newest first across accounts, so updates from several accounts can no longer push every current read out of the 20-row cap.
+
 ## 2026-10-28 (goodreads)
 
 ### Removed
