@@ -231,3 +231,19 @@ test("a failing status page does not cost the reading list", async () => {
   }, NOW) as { activity: Array<{ label: string }> };
   assert.deepEqual(snapshot.activity.map((item) => item.label), ["Still going"]);
 });
+
+test("updates from several accounts never push out the current reads", async () => {
+  const store = env([
+    { id: "a", label: "A", userId: "1" },
+    { id: "b", label: "B", userId: "2" },
+  ]);
+  const posts = Array.from({ length: 12 }, (_, index) =>
+    statusRow({ id: String(index + 1), book: String(index + 30), header: "is on page 5 of", stamp: "Oct 08, 2026 05:28AM" })).join("");
+  const snapshot = await refresh(store, goodreadsProvider, async (input) => {
+    if (String(input).includes("/user_status/")) return new Response(posts);
+    return new Response(profileHtml(row({ id: "11", title: "Still going" })));
+  }, NOW) as { activity: Array<{ value: string }>; featured?: { title: string } };
+  assert.equal(snapshot.activity.length, 20);
+  assert.equal(snapshot.activity.filter((item) => item.value === "Reading").length, 2);
+  assert.equal(snapshot.featured?.title, "Still going");
+});

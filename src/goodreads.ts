@@ -322,12 +322,18 @@ export const goodreadsProvider: Provider = {
         books.push({ ...update, accountId: account.id });
       }
     }
-    books.sort((left, right) => (right.at || "").localeCompare(left.at || ""));
+    // Updates are dated and current reads are not, so a plain date sort and cap
+    // would let updates push every current read out. Current reads keep their
+    // places first; updates fill what is left.
+    const reads = books.filter((book) => book.status !== "update").slice(0, 20);
+    const updates = books.filter((book) => book.status === "update").slice(0, 20 - reads.length);
+    const kept = [...reads, ...updates];
+    kept.sort((left, right) => (right.at || "").localeCompare(left.at || ""));
     return {
       updatedAt: new Date(now).toISOString(),
       stale: false,
       profilePicture: picture,
-      books: books.slice(0, 20),
+      books: kept,
     };
   },
   publish(env, value) {
