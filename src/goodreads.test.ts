@@ -247,3 +247,20 @@ test("updates from several accounts never push out the current reads", async () 
   assert.equal(snapshot.activity.filter((item) => item.value === "Reading").length, 2);
   assert.equal(snapshot.featured?.title, "Still going");
 });
+
+test("the newest updates win the spare places whichever account they come from", async () => {
+  const store = env([
+    { id: "a", label: "A", userId: "1" },
+    { id: "b", label: "B", userId: "2" },
+  ]);
+  const posts = (stamp: string, first: number) => Array.from({ length: 12 }, (_, index) =>
+    statusRow({ id: String(first + index), book: String(first + index), header: "is on page 5 of", stamp })).join("");
+  const snapshot = await refresh(store, goodreadsProvider, async (input) => {
+    if (String(input).endsWith("/user_status/list/1")) return new Response(posts("Oct 01, 2026 05:28AM", 100));
+    if (String(input).endsWith("/user_status/list/2")) return new Response(posts("Oct 08, 2026 05:28AM", 200));
+    return new Response(profileHtml(row({ id: "11", title: "Still going" })));
+  }, NOW) as { activity: Array<{ value: string }> };
+  // Two current reads leave 18 places: all 12 newer posts, then 6 of the older.
+  assert.equal(snapshot.activity.filter((item) => item.value.endsWith("8 Oct")).length, 12);
+  assert.equal(snapshot.activity.filter((item) => item.value.endsWith("1 Oct")).length, 6);
+});

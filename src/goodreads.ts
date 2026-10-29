@@ -326,7 +326,10 @@ export const goodreadsProvider: Provider = {
     // would let updates push every current read out. Current reads keep their
     // places first; updates fill what is left.
     const reads = books.filter((book) => book.status !== "update").slice(0, 20);
-    const updates = books.filter((book) => book.status === "update").slice(0, 20 - reads.length);
+    const updates = books
+      .filter((book) => book.status === "update")
+      .sort((left, right) => (right.at || "").localeCompare(left.at || ""))
+      .slice(0, 20 - reads.length);
     const kept = [...reads, ...updates];
     kept.sort((left, right) => (right.at || "").localeCompare(left.at || ""));
     return {
