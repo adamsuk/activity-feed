@@ -260,7 +260,8 @@ test("the newest updates win the spare places whichever account they come from",
     if (String(input).endsWith("/user_status/list/2")) return new Response(posts("Oct 08, 2026 05:28AM", 200));
     return new Response(profileHtml(row({ id: "11", title: "Still going" })));
   }, NOW) as { activity: Array<{ value: string }> };
-  // Two current reads leave 18 places: all 12 newer posts, then 6 of the older.
-  assert.equal(snapshot.activity.filter((item) => item.value.endsWith("8 Oct")).length, 12);
-  assert.equal(snapshot.activity.filter((item) => item.value.endsWith("1 Oct")).length, 6);
+  // Each account yields its 10 newest posts. Two current reads leave 18 places:
+  // all 10 newer posts, then 8 of the older.
+  assert.equal(snapshot.activity.filter((item) => item.value.endsWith("8 Oct")).length, 10);
+  assert.equal(snapshot.activity.filter((item) => item.value.endsWith("1 Oct")).length, 8);
 });
