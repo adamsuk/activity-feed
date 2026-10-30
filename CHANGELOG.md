@@ -11,6 +11,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## 2026-10-30 (goodreads)
+
+### Removed
+
+- Goodreads from the provider list so it's no longer in the active providers feeds output.
+
+
 ## 2026-10-29 (goodreads)
 
 ### Added
