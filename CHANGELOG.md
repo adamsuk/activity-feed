@@ -16,6 +16,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - `deploy.yml` and `codeql.yml` pin Harden-Runner (`egress-policy: audit`) as the first step of every job.
+- The `deploy` job runs in the `production` GitHub Environment so a deploy can require a reviewer.
+- The `deploy` job has a `production` concurrency group (`cancel-in-progress: false`) so a stale deploy waiting on approval cannot overwrite a newer one, and a running deploy is never cancelled.
+
+### Added
+
+- README rollback steps that bypass the environment approval.
 
 ## 2026-10-30 (goodreads)
 
