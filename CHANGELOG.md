@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## 2026-11-03
+
+### Changed
+
+- `deploy.yml` and `codeql.yml` pin Harden-Runner (`egress-policy: audit`) as the first step of every job.
+
 ## 2026-10-30 (goodreads)
 
 ### Removed

@@ -10,6 +10,9 @@ jobs:
     runs-on: ubuntu-latest
     name: Deploy
     steps:
+      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+        with:
+          egress-policy: audit
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
