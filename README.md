@@ -85,6 +85,18 @@ A classic token needs the `repo` scope to see the same private numbers. That sco
 
 Pushes to `main` run [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml). The repo secret `CF_API_TOKEN` is the same kind of Cloudflare token `blog-worker` uses: Workers Scripts edit, and Workers KV Storage edit, on this account. Add it under the activity-feed repository secrets. It is not copied across from the other repo.
 
+The `deploy` job runs in the `production` GitHub Environment, so a deploy can wait for a required reviewer. The reviewer rule itself is a repository setting (Settings, Environments, `production`), not part of the workflow.
+
+### Rollback
+
+Rollback does not need a second approval, on purpose: a pending approval must never block an urgent rollback. Run it from a machine with a Cloudflare token, not through the gated `Deploy` job, so it skips the `production` environment's review.
+
+1. Check out the last known good commit: `git checkout <good-sha>`.
+2. Deploy it directly: `npx wrangler deploy`, using `CLOUDFLARE_API_TOKEN` in your environment.
+3. Or roll the Worker back to its previous version with `npx wrangler rollback`.
+
+Do not use `gh run rerun` on the `Deploy` workflow for this: it re-enters the `production` environment and waits for approval again.
+
 A cron refreshes the cache every half hour. `/` redirects to `/feed.json`.
 
 The homepage should fetch `https://activities.sradams.co.uk/feed.json`.
