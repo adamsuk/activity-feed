@@ -33,8 +33,11 @@ test("pull requests and pushes to main run the worker tests", () => {
 test("the test workflow has a read-only token and cannot deploy", () => {
   const workflow = read("test.yml");
   assert.match(workflow, /^permissions:\n  contents: read\n\n/m);
-  assert.equal(workflow.match(/^\s*[a-z-]+: write$/gm), null, "no write permission anywhere in test.yml");
-  assert.ok(!workflow.includes("secrets."), "test.yml must not read a secret");
+  // One permissions block only: a job-level block could widen the token again.
+  assert.equal(workflow.match(/^\s*permissions:/gm)?.length, 1, "test.yml must have only the top-level permissions block");
+  assert.equal(workflow.match(/:\s*write\b|write-all/g), null, "no write permission anywhere in test.yml");
+  // Both context forms: secrets.NAME and secrets['NAME'].
+  assert.equal(workflow.match(/\bsecrets\s*[.[]/g), null, "test.yml must not read a secret");
   assert.ok(!workflow.includes("wrangler"), "test.yml must not deploy");
   assert.ok(!workflow.includes("environment:"), "test.yml must not use a deployment environment");
 });
@@ -47,6 +50,6 @@ test("the deploy runs on push to main only", () => {
 test("deploy.yml is the only workflow that uses the Cloudflare credential", () => {
   const users = readdirSync(WORKFLOWS)
     .filter((name) => /\.ya?ml$/.test(name))
-    .filter((name) => read(name).includes("secrets.CF_API_TOKEN"));
+    .filter((name) => read(name).includes("CF_API_TOKEN"));
   assert.deepEqual(users, ["deploy.yml"]);
 });
