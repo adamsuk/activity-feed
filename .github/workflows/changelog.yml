@@ -3,6 +3,7 @@ name: Changelog
 
 # Fails a pull request that does not update CHANGELOG.md, unless it has the skip-changelog label.
 on:
+  merge_group:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
 
