@@ -14,13 +14,9 @@ agents:
   review_bot: coderabbit
   # The repo's own script: node --experimental-strip-types --test src/*.test.ts
   #
-  # These tests DO run in CI, but only on the way out: deploy.yml runs the same
-  # command as a "Test" step before the deploy step, on push to main, so a
-  # failing test blocks the deploy. What is missing is a *pull request* test
-  # gate -- no workflow runs them on pull_request, so a red test is invisible
-  # until after merge. Narrower than software-factory#135, and still worth its
-  # own ticket. (An earlier version of this comment said no workflow ran them
-  # at all; CodeRabbit corrected that on activity-feed#20.)
+  # test.yml runs the same command on every pull request and on every push to
+  # main, in a job with a read-only token and no secret (software-factory#117).
+  # deploy.yml still runs it as a "Test" step before the deploy step.
   test_command: npm test
 
 # Read off a real pull request rather than inferred from the workflow files.
@@ -50,3 +46,5 @@ required_checks:
   - changelog / changelog
   - Analyze (actions)
   - Analyze (javascript-typescript)
+  # The worker tests, from test.yml (software-factory#117, #115).
+  - test

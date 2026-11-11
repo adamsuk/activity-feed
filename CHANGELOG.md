@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## 2026-11-11
+
+### Changed
+
+- `.github/factory.yml` lists `test` in `required_checks`, so station 04 gates on the worker tests that `test.yml` now runs on pull requests. The `factory-main` ruleset requires the same check (adamsuk/software-factory#115).
+
 ## 2026-11-10
 
 ### Added
