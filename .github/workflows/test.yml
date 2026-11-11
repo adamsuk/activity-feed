@@ -5,6 +5,7 @@ name: Test
 # deploy.yml, runs on push to main only, and is the only place the Cloudflare credential
 # is used. src/workflows.test.ts fails if either of those stops being true.
 on:
+  merge_group:
   pull_request:
   push:
     branches:
