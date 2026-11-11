@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## 2026-11-11 (pinned deploy actions)
+
+### Security
+
+- `deploy.yml` pins `actions/checkout`, `actions/setup-node` and `cloudflare/wrangler-action` to full commit SHAs (with a version comment) and declares `permissions: contents: read`. A retagged action can no longer run with `CF_API_TOKEN` in scope, and the job's `GITHUB_TOKEN` is read-only. A test fails if any `uses:` in `.github/workflows/` is not pinned to a 40-character SHA (adamsuk/software-factory#324).
+
 ## 2026-11-11 (merge queue ready)
 
 ### Changed
