@@ -129,3 +129,9 @@ test("only the deploy job references the Cloudflare credential", () => {
   const outside = workflow.replace(job(workflow, "deploy"), "");
   assert.ok(!outside.includes("CF_API_TOKEN"), "CF_API_TOKEN outside the deploy job");
 });
+
+test("wrangler is pinned to an exact release and re-runs may replace the artifact", () => {
+  const workflow = read("deploy.yml");
+  assert.match(workflow, /^  WRANGLER_VERSION: "4\.\d+\.\d+"$/m);
+  assert.match(job(workflow, "build"), /^\s*overwrite: true$/m);
+});

@@ -14,7 +14,7 @@ permissions:
 # triggers and vars still come from wrangler.toml. The pinned wrangler is the only
 # thing installed in the deploy job.
 env:
-  WRANGLER_VERSION: "4.160.1"
+  WRANGLER_VERSION: "4.154.0"
 
 jobs:
   build:
@@ -47,6 +47,9 @@ jobs:
           name: worker-bundle-${{ github.sha }}
           path: bundle/index.js
           if-no-files-found: error
+          # A re-run on the same commit replaces the artifact; the new build job output digest
+          # is what the deploy job verifies, so the check is not weakened.
+          overwrite: true
           retention-days: 30
 
   deploy:
