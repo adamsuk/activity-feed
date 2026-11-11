@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## 2026-11-11 (size label)
+
+### Added
+
+- `size-label.yml` calls the shared `adamsuk/gh-factory` size-label workflow, pinned to a full commit SHA, so every pull request is labelled `size/XS` to `size/XL` (adamsuk/software-factory#341).
+
 ## 2026-11-11 (pinned deploy actions)
 
 ### Security
