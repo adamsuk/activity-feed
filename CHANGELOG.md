@@ -11,6 +11,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## 2026-11-10
+
+### Added
+
+- `test.yml` runs the worker tests (`node --experimental-strip-types --test src/*.test.ts`) on every pull request and on every push to `main`. The job has a read-only token, uses no secret and cannot deploy. Until now the tests ran only inside the deploy job, after merge.
+- `src/workflows.test.ts` fails if the test workflow gains a write permission or a secret, if the deploy stops being push-to-`main` only, or if any workflow other than `deploy.yml` uses the Cloudflare credential.
+
 ## 2026-11-03
 
 ### Changed
