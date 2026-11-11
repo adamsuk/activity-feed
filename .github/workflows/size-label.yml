@@ -1,0 +1,28 @@
+name: Size label
+
+# Labels a pull request size/XS, size/S, size/M, size/L or size/XL.
+# Thresholds are passed explicitly and match the callee's defaults.
+# label_prefix and exclude_paths stay unset, so those defaults apply
+# (size/ and empty).
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# The called workflow can only narrow this token. pull-requests: write is
+# required again on the calling job: without a job permissions block the
+# callee receives the repository default token, which does not grant it.
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  size-label:
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: adamsuk/gh-factory/.github/workflows/size-label.yml@09014a5d0c8641f246411a08f303c08cd7750e24
+    with:
+      xs_lines: 10
+      s_lines: 50
+      m_lines: 200
+      l_lines: 500
