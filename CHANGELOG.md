@@ -11,6 +11,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## 2026-11-11 (build once, deploy the same bundle)
+
+### Changed
+
+- `deploy.yml` is split in two. A `build` job with no secrets and no environment runs the tests, bundles the worker once (`wrangler deploy --dry-run --outdir dist`, wrangler pinned to 4.160.1), records the sha256 of `index.js` as a job output and uploads it as the artifact `worker-bundle-<commit sha>`. The `deploy` job (`needs: build`, environment `production`, concurrency group `production`) downloads that artifact, re-verifies the sha256, then publishes it with `wrangler deploy --no-bundle`. It runs no project install, test or build, and is the only job that reads `CF_API_TOKEN`. Bindings, KV, cron triggers and vars still come from `wrangler.toml`. Tests in `src/workflows.test.ts` lock this shape (adamsuk/software-factory#313).
+- Cloudflare settings: none needed. The deploy is an ordinary `wrangler deploy` of a prebuilt script with the same token, so no Cloudflare version or promote setting is involved.
+- Roll back with `npx wrangler rollback` (or revert and push); the practised procedure is `docs/runbooks/rollback-pages-and-workers.md` in adamsuk/software-factory.
+- Not verified before merge: the workflow only runs on a push to `main` with the `production` environment approval.
+
 ## 2026-11-11 (size label)
 
 ### Added
