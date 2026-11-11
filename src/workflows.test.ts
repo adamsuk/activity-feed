@@ -53,3 +53,25 @@ test("deploy.yml is the only workflow that uses the Cloudflare credential", () =
     .filter((name) => read(name).includes("CF_API_TOKEN"));
   assert.deepEqual(users, ["deploy.yml"]);
 });
+
+test("deploy.yml has a read-only token and nothing wider", () => {
+  const workflow = read("deploy.yml");
+  assert.match(workflow, /^permissions:\n  contents: read\n\n/m);
+  assert.equal(workflow.match(/^\s*permissions:/gm)?.length, 1, "deploy.yml must have only the top-level permissions block");
+  assert.equal(workflow.match(/:\s*write\b|write-all/g), null, "no write permission anywhere in deploy.yml");
+});
+
+test("every action in every workflow is pinned to a 40-character commit SHA", () => {
+  const unpinned: string[] = [];
+  for (const name of readdirSync(WORKFLOWS).filter((file) => /\.ya?ml$/.test(file))) {
+    read(name).split("\n").forEach((line, index) => {
+      const match = /^\s*(?:-\s+)?uses:\s*(\S+)/.exec(line);
+      if (!match) return;
+      const ref = match[1].replace(/^["']|["']$/g, "");
+      // Local actions (./path) have no ref to pin.
+      if (ref.startsWith("./")) return;
+      if (!/@[0-9a-f]{40}$/.test(ref)) unpinned.push(`${name}:${index + 1} ${ref}`);
+    });
+  }
+  assert.deepEqual(unpinned, []);
+});
