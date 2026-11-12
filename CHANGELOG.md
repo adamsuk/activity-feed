@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## 2026-11-12 (block egress on every job)
+
+### Changed
+
+- Harden-Runner is now `egress-policy: block` with an `allowed-endpoints` list on the `Build` job of `deploy.yml` ([43241952589](https://github.com/adamsuk/activity-feed/actions/runs/43241952589)), the `test` job of `test.yml` ([43243398124](https://github.com/adamsuk/activity-feed/actions/runs/43243398124)) and both `Analyze` jobs of `codeql.yml` ([43243397896](https://github.com/adamsuk/activity-feed/actions/runs/43243397896)). No job is left in `audit` (adamsuk/software-factory#371).
+
 ## 2026-11-12 (prove the canary rollback)
 
 ### Added
