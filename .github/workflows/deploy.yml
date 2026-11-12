@@ -4,6 +4,14 @@ on:
   push:
     branches:
       - main
+  # A manual run for proving the rollback live (docs/progressive-release.md). The only input is
+  # off by default; a push to main never sets it, so normal deploys are unchanged.
+  workflow_dispatch:
+    inputs:
+      force_guardrail_failure:
+        description: "Force the guardrail to fail so the Rollback step runs and Promote is skipped"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -113,6 +121,8 @@ jobs:
       - name: "Guardrail: canary health"
         id: guardrail
         if: steps.canary.outcome == 'success'
+        env:
+          GUARDRAIL_FORCE_FAIL: ${{ inputs.force_guardrail_failure && 'true' || 'false' }}
         run: bash scripts/gradual-deploy.sh guardrail
       - name: Rollback to the stable version
         # Runs when the canary step ran (even if it failed or timed out after traffic was split)

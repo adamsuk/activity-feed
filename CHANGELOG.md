@@ -11,6 +11,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## 2026-11-12 (prove the canary rollback)
+
+### Added
+
+- `src/gradual-deploy.test.ts` runs `scripts/gradual-deploy.sh rollback` against a stub `wrangler` and asserts `versions deploy <stable>@100` is called and the script exits non-zero.
+- `deploy.yml` gains a `workflow_dispatch` trigger with one boolean input, `force_guardrail_failure` (default `false`), which makes the guardrail fail so the rollback can be proven live. Normal deploys on push to `main` are unchanged. `docs/progressive-release.md` explains how to run it.
+
 ## 2026-11-12 (block egress on the Deploy job)
 
 ### Changed

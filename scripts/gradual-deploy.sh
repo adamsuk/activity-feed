@@ -64,6 +64,11 @@ canary() {
 guardrail() {
   local new requests interval max_pct allowed failures=0 i code
   new="$(read_id new)"
+  # Set by the manual forced-failure run (docs/progressive-release.md) to exercise the rollback live.
+  if [[ "${GUARDRAIL_FORCE_FAIL:-false}" == "true" ]]; then
+    echo "Guardrail forced to fail (GUARDRAIL_FORCE_FAIL=true): no probes were sent." >&2
+    exit 1
+  fi
   requests="${GUARDRAIL_REQUESTS:?}"; interval="${GUARDRAIL_INTERVAL_SECONDS:?}"; max_pct="${GUARDRAIL_MAX_ERROR_PERCENT:?}"
   allowed=$(( requests * max_pct / 100 ))
   echo "Guardrail: ${requests} requests, ${interval}s apart, at most ${allowed} may fail (${max_pct}%)."
