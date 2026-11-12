@@ -72,9 +72,16 @@ jobs:
       group: production
       cancel-in-progress: false
     steps:
+      # The allowlist is the recommended policy of this job in run 43177918906
+      # (https://app.stepsecurity.io/github/adamsuk/activity-feed/actions/runs/43177918906).
       - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
-          egress-policy: audit
+          egress-policy: block
+          allowed-endpoints: >
+            api.cloudflare.com:443
+            github.com:443
+            registry.npmjs.org:443
+            sparrow.cloudflare.com:443
       # Checked out for wrangler.toml (bindings, KV, cron triggers, vars) and scripts/gradual-deploy.sh.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
