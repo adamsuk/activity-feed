@@ -15,7 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- The `Deploy` job, which holds `CF_API_TOKEN`, now runs Harden-Runner with `egress-policy: block` and an allowlist of `api.cloudflare.com`, `github.com`, `registry.npmjs.org` and `sparrow.cloudflare.com` (all :443), taken from run 43177918906. The `Build` job stays on `audit` until its own list is known (adamsuk/software-factory#354).
+- The `Deploy` job, which holds `CF_API_TOKEN`, now runs Harden-Runner with `egress-policy: block` and an allowlist of `activities.sradams.co.uk`, `api.cloudflare.com`, `github.com`, `registry.npmjs.org` and `sparrow.cloudflare.com` (all :443), taken from the recommended policy of run 43182552056, which includes the canary and guardrail steps. The `Build` job stays on `audit` until its own list is known (adamsuk/software-factory#354).
 
 ## 2026-11-12 (gradual deploy with automatic rollback)
 

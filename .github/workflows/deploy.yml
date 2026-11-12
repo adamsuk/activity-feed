@@ -78,6 +78,7 @@ jobs:
         with:
           egress-policy: block
           allowed-endpoints: >
+            activities.sradams.co.uk:443
             api.cloudflare.com:443
             github.com:443
             registry.npmjs.org:443
