@@ -107,9 +107,10 @@ jobs:
         if: steps.canary.outcome == 'success'
         run: bash scripts/gradual-deploy.sh guardrail
       - name: Rollback to the stable version
-        # Runs when the canary is live and the guardrail did not pass: failed, cancelled or
-        # never ran. Skipped when no canary was started, so there is nothing to undo.
-        if: ${{ always() && steps.canary.outcome == 'success' && steps.guardrail.outcome != 'success' }}
+        # Runs when the canary step ran (even if it failed or timed out after traffic was split)
+        # and the guardrail did not pass: failed, cancelled or never ran. Skipped when no canary
+        # was started, so there is nothing to undo. Restoring the stable version is idempotent.
+        if: ${{ always() && steps.canary.outcome != 'skipped' && steps.guardrail.outcome != 'success' }}
         env: *cloudflare
         run: bash scripts/gradual-deploy.sh rollback
       - name: Promote the prebuilt bundle to 100 percent

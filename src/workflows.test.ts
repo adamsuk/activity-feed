@@ -195,3 +195,12 @@ test("progressive-release.md names the Cloudflare settings and the line Pages st
   assert.match(doc, /line repo's Cloudflare Pages deploy stays `deploy=release` under the human gate/);
   assert.match(readFileSync(join(root, "README.md"), "utf8"), /\(docs\/progressive-release\.md\)/);
 });
+
+test("the rollback also covers a canary step that failed after splitting traffic", () => {
+  const deploy = job(read("deploy.yml"), "deploy");
+  const rollback = stepIndex(deploy, "Rollback to the stable version");
+  const promote = stepIndex(deploy, "Promote the prebuilt bundle to 100 percent");
+  const step = deploy.slice(rollback, promote);
+  assert.match(step, /steps\.canary\.outcome != 'skipped'/);
+  assert.doesNotMatch(step, /steps\.canary\.outcome == 'success'/);
+});

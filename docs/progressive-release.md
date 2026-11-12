@@ -18,8 +18,9 @@ maintainer approves the `production` environment, the deploy job does this, usin
    (`GUARDRAIL_REQUESTS`, `GUARDRAIL_INTERVAL_SECONDS`, `GUARDRAIL_MAX_ERROR_PERCENT`). It is a
    smoke check: the feed answers from KV, so it proves the version starts and serves, not that
    every upstream source works.
-5. **Rollback to the stable version.** Runs when the canary is live and the guardrail did not
-   pass (failed, cancelled or never ran): `wrangler versions deploy <stable>@100`, then it
+5. **Rollback to the stable version.** Runs when the canary step ran, including a canary step that
+   failed or timed out after traffic was split, and the guardrail did not pass (failed,
+   cancelled or never ran): `wrangler versions deploy <stable>@100`, then it
    fails the job so the run is red.
 6. Promote: `wrangler deploy --no-bundle bundle/index.js` of the same bundle, to 100%. A full
    deploy also applies the cron trigger (`*/30 * * * *`) and vars from `wrangler.toml`
