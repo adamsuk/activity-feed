@@ -97,6 +97,8 @@ Rollback does not need a second approval, on purpose: a pending approval must ne
 
 Do not use `gh run rerun` on the `Deploy` workflow for this: it re-enters the `production` environment and waits for approval again.
 
+Production deploys are gradual (canary, guardrail, automatic rollback). See [docs/progressive-release.md](docs/progressive-release.md).
+
 A cron refreshes the cache every half hour. `/` redirects to `/feed.json`.
 
 The homepage should fetch `https://activities.sradams.co.uk/feed.json`.

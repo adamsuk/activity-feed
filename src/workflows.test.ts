@@ -135,3 +135,72 @@ test("wrangler is pinned to an exact release and re-runs may replace the artifac
   assert.match(workflow, /^  WRANGLER_VERSION: "4\.\d+\.\d+"$/m);
   assert.match(job(workflow, "build"), /^\s*overwrite: true$/m);
 });
+
+// Gradual deploy: canary, guardrail, rollback, promote.
+function stepIndex(deploy: string, name: string): number {
+  const index = deploy.indexOf(`- name: ${name}`);
+  assert.ok(index >= 0, `deploy job has no step named ${name}`);
+  return index;
+}
+
+test("the canary percentage is set to a partial rollout", () => {
+  const match = /^  CANARY_PERCENT: "(\d+)"$/m.exec(read("deploy.yml"));
+  assert.ok(match, "CANARY_PERCENT is not set in the workflow env");
+  const percent = Number(match[1]);
+  assert.ok(percent >= 1 && percent <= 99, `canary percent ${percent} is not in 1..99`);
+});
+
+test("the guardrail, rollback and promote steps run in that order", () => {
+  const deploy = job(read("deploy.yml"), "deploy");
+  const canary = stepIndex(deploy, "Canary, shift CANARY_PERCENT of traffic to the new version");
+  const guardrail = stepIndex(deploy, '"Guardrail: canary health"');
+  const rollback = stepIndex(deploy, "Rollback to the stable version");
+  const promote = stepIndex(deploy, "Promote the prebuilt bundle to 100 percent");
+  assert.ok(canary < guardrail && guardrail < rollback && rollback < promote);
+  assert.match(deploy, /id: guardrail/);
+  assert.match(deploy.slice(rollback, promote), /if: .*steps\.guardrail\.outcome != 'success'/);
+  assert.match(deploy.slice(rollback, promote), /always\(\)/);
+  assert.match(deploy.slice(rollback, promote), /gradual-deploy\.sh rollback/);
+  assert.match(deploy.slice(promote), /deploy --no-bundle bundle\/index\.js/);
+});
+
+test("the Cloudflare credential reaches only the steps that call Cloudflare", () => {
+  const deploy = job(read("deploy.yml"), "deploy");
+  const steps = deploy.split(/^      - /m).slice(1);
+  const withToken = steps.filter((step) => /CLOUDFLARE_API_TOKEN|\*cloudflare/.test(step)).map((step) => /name: (.*)/.exec(step)?.[1] ?? "");
+  assert.equal(withToken.length, 4);
+  assert.ok(!withToken.some((name) => name.includes("Guardrail")), "the guardrail must not get the credential");
+  for (const step of steps.filter((s) => /uses:/.test(s))) assert.ok(!/CLOUDFLARE_API_TOKEN|\*cloudflare/.test(step));
+});
+
+test("the rollback script restores the stable version at 100 and validates ids", () => {
+  const script = readFileSync(join(WORKFLOWS, "..", "..", "scripts", "gradual-deploy.sh"), "utf8");
+  assert.match(script, /versions deploy "\$\{stable\}@100"/);
+  assert.match(script, /Cloudflare-Workers-Version-Overrides/);
+  assert.match(script, /\[0-9a-f\]\{8\}-/);
+  assert.ok(!/\beval\b/.test(script));
+});
+
+test("the worker name in the workflow matches wrangler.toml", () => {
+  const toml = readFileSync(join(WORKFLOWS, "..", "..", "wrangler.toml"), "utf8");
+  const name = /^name = "([^"]+)"/m.exec(toml)?.[1];
+  assert.match(read("deploy.yml"), new RegExp(`^  WORKER_NAME: ${name}$`, "m"));
+});
+
+test("progressive-release.md names the Cloudflare settings and the line Pages statement", () => {
+  const root = join(WORKFLOWS, "..", "..");
+  const doc = readFileSync(join(root, "docs", "progressive-release.md"), "utf8");
+  assert.match(doc, /Workers Scripts: Edit/);
+  assert.match(doc, /CANARY_PERCENT/);
+  assert.match(doc, /line repo's Cloudflare Pages deploy stays `deploy=release` under the human gate/);
+  assert.match(readFileSync(join(root, "README.md"), "utf8"), /\(docs\/progressive-release\.md\)/);
+});
+
+test("the rollback also covers a canary step that failed after splitting traffic", () => {
+  const deploy = job(read("deploy.yml"), "deploy");
+  const rollback = stepIndex(deploy, "Rollback to the stable version");
+  const promote = stepIndex(deploy, "Promote the prebuilt bundle to 100 percent");
+  const step = deploy.slice(rollback, promote);
+  assert.match(step, /steps\.canary\.outcome != 'skipped'/);
+  assert.doesNotMatch(step, /steps\.canary\.outcome == 'success'/);
+});
