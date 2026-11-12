@@ -58,3 +58,5 @@ Cloudflare: the exact `deployments list --json` shape on a live Worker (checked 
 wrangler's source), the token permission above, the override header taking effect on the custom
 domain, YAML anchor support for the shared `env` in GitHub Actions, and `wrangler deploy` after a
 canary on the same Worker. Watch the first run.
+
+Tracking issue: adamsuk/software-factory#308.
