@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - The `deploy` job now uploads a version with no traffic, sends `CANARY_PERCENT` (10) of traffic to it, runs the "Guardrail: canary health" probes against the canary version, and rolls back to the stable version at 100% (failing the run) if the guardrail does not pass. Otherwise it promotes the same verified bundle with `wrangler deploy`. Build once, the digest check, the SHA-pinned actions and the scoped `CF_API_TOKEN` are unchanged. The mechanics are in `scripts/gradual-deploy.sh`; the Cloudflare settings and what is unverified are in `docs/progressive-release.md` (adamsuk/software-factory#308).
 - The rollback also runs when the canary step itself fails or times out after traffic was split (it only skips when no canary was started); restoring the stable version at 100% is idempotent.
+- The Worker must already exist: a brand-new Worker fails the deployments lookup (error 10007) by design, so bootstrap it once with a plain `wrangler deploy`.
 - The line repo's Pages deploy stays `deploy=release` under the human gate.
 - Not verified before merge: the workflow only runs on a push to `main` with the `production` environment approval.
 

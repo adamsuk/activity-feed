@@ -31,14 +31,15 @@ read_id() {
 begin() {
   mkdir -p "$STATE"
   # Stable = the version holding most traffic in the newest deployment. Empty list means
-  # the Worker was never deployed: there is nothing to canary against or roll back to.
+  # the Worker has no deployment: there is nothing to canary against or roll back to. A Worker that
+  # does not exist at all makes this lookup fail (error 10007) and stays fatal: bootstrap it first.
   local deployments stable=""
   deployments="$(wr deployments list --name "${WORKER_NAME:?}" --json)"
   stable="$(jq -r 'if length == 0 then "" else (sort_by(.created_on) | last | .versions | sort_by(-.percentage) | first | .version_id) end' <<<"$deployments")"
   if [[ -n "$stable" ]]; then
     valid_uuid "$stable" || { echo "unexpected stable version id" >&2; exit 1; }
   else
-    echo "No earlier deployment: first deploy goes straight to 100% (no canary, no rollback target)."
+    echo "No earlier deployment: this deploy goes straight to 100% (no canary, no rollback target)."
   fi
   printf '%s' "$stable" >"$STATE/stable"
 

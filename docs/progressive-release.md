@@ -27,8 +27,11 @@ maintainer approves the `production` environment, the deploy job does this, usin
    (`versions upload` alone changes neither triggers nor routes). `keep_vars = true` keeps
    dashboard vars; secrets are never deleted. This uploads a second version with identical code.
 
-First ever deploy, or no earlier deployment: no stable version exists, so steps 3 to 5 are
-skipped and the bundle goes straight to 100% (step 6). There is nothing to roll back to.
+The Worker must already exist. A brand-new Worker has no deployments, and Cloudflare answers
+the deployments lookup with a worker-not-found error (10007) that this workflow treats as fatal,
+so bootstrap it once with a plain `npx wrangler deploy` first. A Worker that exists but has an
+empty deployment list has no stable version, so steps 3 to 5 are skipped and the bundle goes
+straight to 100% (step 6); there is nothing to roll back to.
 
 ## Cloudflare settings the maintainer must apply
 
