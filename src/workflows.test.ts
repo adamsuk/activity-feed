@@ -75,3 +75,63 @@ test("every action in every workflow is pinned to a 40-character commit SHA", ()
   }
   assert.deepEqual(unpinned, []);
 });
+
+// Build once, deploy that bundle. Job bodies are cut out of the file as text.
+function job(workflow: string, name: string): string {
+  const match = new RegExp(`^  ${name}:\\n((?:(?: {4}.*)?\\n)*)`, "m").exec(workflow);
+  assert.ok(match, `deploy.yml has no ${name} job`);
+  return match[1];
+}
+
+test("the build job exists, runs the tests and references no secret or environment", () => {
+  const build = job(read("deploy.yml"), "build");
+  assert.ok(build.includes(`run: ${TEST_COMMAND}`));
+  assert.ok(build.includes("--dry-run --outdir dist"));
+  assert.equal(build.match(/\bsecrets\s*[.[]/g), null, "build must not read a secret");
+  assert.ok(!build.includes("CF_API_TOKEN"));
+  assert.ok(!/^\s*environment:/m.test(build), "build must not use a deployment environment");
+  assert.match(build, /sha256sum/);
+  assert.match(build, /^\s*digest: \$\{\{ steps\.\w+\.outputs\.sha256 \}\}$/m);
+  assert.match(build, /uses: actions\/upload-artifact@[0-9a-f]{40}/);
+  assert.match(build, /name: worker-bundle-\$\{\{ github\.sha \}\}/);
+});
+
+test("the deploy job needs build, runs in production and publishes the verified artifact", () => {
+  const deploy = job(read("deploy.yml"), "deploy");
+  assert.match(deploy, /^    needs: build$/m);
+  assert.match(deploy, /^    environment: production$/m);
+  assert.match(deploy, /^      group: production$/m);
+  assert.match(deploy, /uses: actions\/download-artifact@[0-9a-f]{40}/);
+  assert.match(deploy, /name: worker-bundle-\$\{\{ github\.sha \}\}/);
+  assert.match(deploy, /\$\{\{ needs\.build\.outputs\.digest \}\}/);
+  assert.match(deploy, /sha256sum --check/);
+  assert.match(deploy, /wrangler@\$\{WRANGLER_VERSION\}" deploy --no-bundle bundle\/index\.js/);
+});
+
+test("the deploy job installs, tests and builds nothing from the project", () => {
+  const deploy = job(read("deploy.yml"), "deploy");
+  assert.equal(deploy.match(/\bnpm (ci|install|i|run|test)\b/g), null, "no project install, run or test");
+  assert.ok(!deploy.includes("--test"), "no test step");
+  assert.ok(!deploy.includes("--dry-run"), "no build step");
+  assert.ok(!deploy.includes("--outdir"), "no build step");
+  assert.ok(!deploy.includes("cloudflare/wrangler-action"), "deploys the prebuilt bundle with a pinned wrangler");
+  // Every deploy must be of the downloaded bundle, never of the source tree.
+  for (const line of deploy.split("\n").filter((l) => /wrangler@/.test(l))) {
+    assert.ok(line.includes("--no-bundle bundle/index.js"), `unexpected wrangler call: ${line.trim()}`);
+  }
+});
+
+test("only the deploy job references the Cloudflare credential", () => {
+  const workflow = read("deploy.yml");
+  assert.equal(job(workflow, "build").match(/CF_API_TOKEN/g), null);
+  assert.equal(job(workflow, "deploy").match(/secrets\.CF_API_TOKEN/g)?.length, 1);
+  // Nothing outside the two jobs (workflow-level env, for one) may name it.
+  const outside = workflow.replace(job(workflow, "deploy"), "");
+  assert.ok(!outside.includes("CF_API_TOKEN"), "CF_API_TOKEN outside the deploy job");
+});
+
+test("wrangler is pinned to an exact release and re-runs may replace the artifact", () => {
+  const workflow = read("deploy.yml");
+  assert.match(workflow, /^  WRANGLER_VERSION: "4\.\d+\.\d+"$/m);
+  assert.match(job(workflow, "build"), /^\s*overwrite: true$/m);
+});
