@@ -204,3 +204,12 @@ test("the rollback also covers a canary step that failed after splitting traffic
   assert.match(step, /steps\.canary\.outcome != 'skipped'/);
   assert.doesNotMatch(step, /steps\.canary\.outcome == 'success'/);
 });
+
+test("the deploy job blocks egress to the allowlisted hosts and build stays in audit", () => {
+  const workflow = read("deploy.yml");
+  const deploy = job(workflow, "deploy");
+  assert.match(deploy, /^\s+egress-policy: block$/m);
+  assert.ok(!/egress-policy: audit/.test(deploy), "deploy must not audit only");
+  assert.match(deploy, /allowed-endpoints:/);
+  assert.match(job(workflow, "build"), /^\s+egress-policy: audit$/m);
+});
