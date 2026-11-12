@@ -211,13 +211,12 @@ test("the rollback also covers a canary step that failed after splitting traffic
   assert.doesNotMatch(step, /steps\.canary\.outcome == 'success'/);
 });
 
-test("the deploy job blocks egress to the allowlisted hosts and build stays in audit", () => {
+test("the deploy job blocks egress to the allowlisted hosts", () => {
   const workflow = read("deploy.yml");
   const deploy = job(workflow, "deploy");
   assert.match(deploy, /^\s+egress-policy: block$/m);
   assert.ok(!/egress-policy: audit/.test(deploy), "deploy must not audit only");
   assert.match(deploy, /allowed-endpoints:/);
-  assert.match(job(workflow, "build"), /^\s+egress-policy: audit$/m);
 });
 
 test("the forced guardrail failure is wired from the dispatch input to the guardrail step only", () => {
@@ -232,4 +231,18 @@ test("the forced guardrail failure is wired from the dispatch input to the guard
   assert.equal(deploy.match(/GUARDRAIL_FORCE_FAIL/g)?.length, 1, "wired on the guardrail step only");
   // Off by default: nothing else reads the input, so a push cannot turn it on.
   assert.equal(read("deploy.yml").match(/inputs\.force_guardrail_failure/g)?.length, 1);
+});
+
+test("no Harden-Runner step is left in audit and every block names its allowed endpoints", () => {
+  for (const file of ["codeql.yml", "deploy.yml", "test.yml"]) {
+    const workflow = read(file);
+    assert.ok(!/egress-policy: audit/.test(workflow), `${file} must not audit`);
+    const steps = workflow.match(/step-security\/harden-runner@[\s\S]*?(?=\n      - uses:|\n      - name:|$)/g) ?? [];
+    assert.ok(steps.length > 0, `${file} has a Harden-Runner step`);
+    for (const step of steps) {
+      assert.match(step, /egress-policy: block/, file);
+      assert.match(step, /allowed-endpoints:/, file);
+      assert.ok(!/\*/.test(step.replace(/^\s*#.*$/gm, "")), `${file} allowlist has no wildcard`);
+    }
+  }
 });
