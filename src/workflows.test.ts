@@ -42,9 +42,15 @@ test("the test workflow has a read-only token and cannot deploy", () => {
   assert.ok(!workflow.includes("environment:"), "test.yml must not use a deployment environment");
 });
 
-test("the deploy runs on push to main only", () => {
+test("the deploy runs on push to main, plus a manual run whose only input is the default-off forced failure", () => {
   const on = triggers(read("deploy.yml"));
-  assert.equal(on.trim(), "push:\n    branches:\n      - main");
+  assert.match(on, /^  push:\n    branches:\n      - main\n/);
+  assert.match(on, /^  workflow_dispatch:\n    inputs:\n      force_guardrail_failure:\n(?:        .*\n)*$/m);
+  // Exactly one input, and it defaults to false.
+  assert.equal(on.match(/^      \S.*:$/gm)?.length, 1, "force_guardrail_failure must be the only input");
+  assert.match(on, /^        type: boolean$/m);
+  assert.match(on, /^        default: false$/m);
+  assert.ok(!/pull_request|schedule/.test(on), "no other trigger");
 });
 
 test("deploy.yml is the only workflow that uses the Cloudflare credential", () => {
@@ -212,4 +218,18 @@ test("the deploy job blocks egress to the allowlisted hosts and build stays in a
   assert.ok(!/egress-policy: audit/.test(deploy), "deploy must not audit only");
   assert.match(deploy, /allowed-endpoints:/);
   assert.match(job(workflow, "build"), /^\s+egress-policy: audit$/m);
+});
+
+test("the forced guardrail failure is wired from the dispatch input to the guardrail step only", () => {
+  const deploy = job(read("deploy.yml"), "deploy");
+  const guardrail = deploy.indexOf('"Guardrail: canary health"');
+  const rollback = deploy.indexOf("Rollback to the stable version");
+  assert.ok(guardrail >= 0 && guardrail < rollback);
+  assert.match(
+    deploy.slice(guardrail, rollback),
+    /GUARDRAIL_FORCE_FAIL: \$\{\{ inputs\.force_guardrail_failure && 'true' \|\| 'false' \}\}/,
+  );
+  assert.equal(deploy.match(/GUARDRAIL_FORCE_FAIL/g)?.length, 1, "wired on the guardrail step only");
+  // Off by default: nothing else reads the input, so a push cannot turn it on.
+  assert.equal(read("deploy.yml").match(/inputs\.force_guardrail_failure/g)?.length, 1);
 });

@@ -51,6 +51,24 @@ Rollback by hand: `npx wrangler rollback`, or `npx wrangler versions deploy <id>
 The line repo's Cloudflare Pages deploy stays `deploy=release` under the human gate. This
 change covers only the activity-feed Worker.
 
+## Proving the rollback live (forced failure)
+
+The Rollback step is covered by `src/gradual-deploy.test.ts` against a stub `wrangler`, but it
+has not yet run live. To prove it, the maintainer runs **Actions > Deploy > Run workflow** on
+`main` with `force_guardrail_failure` ticked (the only input; it defaults to off, and a push to
+`main` never sets it) and approves the `production` run. The canary serves the bundle that is
+already live, so users see no change. Expected result:
+
+- "Guardrail: canary health" fails at once with "Guardrail forced to fail", sending no probes.
+- "Rollback to the stable version" runs and succeeds (the stable version is back at 100%).
+- "Promote the prebuilt bundle to 100 percent" is skipped, and the run is red.
+
+Record the run below once it has happened.
+
+| Date | Run | Rollback step | Promote step |
+| --- | --- | --- | --- |
+| _pending_ | _run URL to be recorded by the maintainer_ | _pending_ | _pending_ |
+
 ## Unverified until the first real run
 
 Only the maintainer's `production` approval can run this workflow. Not yet verified against
