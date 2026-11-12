@@ -13,8 +13,19 @@ permissions:
 # code that reaches production is the code the tests ran against. Bindings, KV, cron
 # triggers and vars still come from wrangler.toml. The pinned wrangler is the only
 # thing installed in the deploy job.
+#
+# The deploy is gradual: the new version is uploaded with no traffic, CANARY_PERCENT of
+# traffic is shifted to it, a guardrail probes it, and only then is it promoted to 100%.
+# If the guardrail fails, the Rollback step puts the stable version back and fails the run.
+# The mechanics live in scripts/gradual-deploy.sh; docs/progressive-release.md explains them.
 env:
   WRANGLER_VERSION: "4.154.0"
+  WORKER_NAME: activity-feed
+  WORKER_URL: https://activities.sradams.co.uk/feed.json
+  CANARY_PERCENT: "10"
+  GUARDRAIL_REQUESTS: "20"
+  GUARDRAIL_INTERVAL_SECONDS: "3"
+  GUARDRAIL_MAX_ERROR_PERCENT: "10"
 
 jobs:
   build:
@@ -64,7 +75,7 @@ jobs:
       - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: audit
-      # Checked out for wrangler.toml only (bindings, KV, cron triggers, vars).
+      # Checked out for wrangler.toml (bindings, KV, cron triggers, vars) and scripts/gradual-deploy.sh.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -79,7 +90,29 @@ jobs:
         run: |
           test -n "$EXPECTED_SHA256"
           echo "${EXPECTED_SHA256}  bundle/index.js" | sha256sum --check --strict
-      - name: Publish the prebuilt bundle
-        env:
+      # The credential is written once and reused by alias on the steps that call Cloudflare.
+      # The guardrail probes the public URL and never sees it.
+      - name: Record the stable version and upload the new one
+        id: begin
+        env: &cloudflare
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+        run: bash scripts/gradual-deploy.sh begin
+      - name: Canary, shift CANARY_PERCENT of traffic to the new version
+        id: canary
+        if: steps.begin.outputs.stable_version != ''
+        env: *cloudflare
+        run: bash scripts/gradual-deploy.sh canary
+      - name: "Guardrail: canary health"
+        id: guardrail
+        if: steps.canary.outcome == 'success'
+        run: bash scripts/gradual-deploy.sh guardrail
+      - name: Rollback to the stable version
+        # Runs when the canary is live and the guardrail did not pass: failed, cancelled or
+        # never ran. Skipped when no canary was started, so there is nothing to undo.
+        if: ${{ always() && steps.canary.outcome == 'success' && steps.guardrail.outcome != 'success' }}
+        env: *cloudflare
+        run: bash scripts/gradual-deploy.sh rollback
+      - name: Promote the prebuilt bundle to 100 percent
+        # Same verified bundle; a full deploy also applies the cron trigger and vars.
+        env: *cloudflare
         run: npx --yes "wrangler@${WRANGLER_VERSION}" deploy --no-bundle bundle/index.js

@@ -11,6 +11,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## 2026-11-12 (gradual deploy with automatic rollback)
+
+### Changed
+
+- The `deploy` job now uploads a version with no traffic, sends `CANARY_PERCENT` (10) of traffic to it, runs the "Guardrail: canary health" probes against the canary version, and rolls back to the stable version at 100% (failing the run) if the guardrail does not pass. Otherwise it promotes the same verified bundle with `wrangler deploy`. Build once, the digest check, the SHA-pinned actions and the scoped `CF_API_TOKEN` are unchanged. The mechanics are in `scripts/gradual-deploy.sh`; the Cloudflare settings and what is unverified are in `docs/progressive-release.md` (adamsuk/software-factory#308).
+- The line repo's Pages deploy stays `deploy=release` under the human gate.
+- Not verified before merge: the workflow only runs on a push to `main` with the `production` environment approval.
+
 ## 2026-11-11 (build once, deploy the same bundle)
 
 ### Changed
