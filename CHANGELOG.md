@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `src/gradual-deploy.test.ts` runs `scripts/gradual-deploy.sh rollback` against a stub `wrangler` and asserts `versions deploy <stable>@100` is called and the script exits non-zero.
 - `deploy.yml` gains a `workflow_dispatch` trigger with one boolean input, `force_guardrail_failure` (default `false`), which makes the guardrail fail so the rollback can be proven live. Normal deploys on push to `main` are unchanged. `docs/progressive-release.md` explains how to run it.
+- The forced-failure run happened on 2026-11-12 ([43242601767](https://github.com/adamsuk/activity-feed/actions/runs/43242601767)): the guardrail failed, the rollback restored the stable version at 100% and Promote was skipped. The run URL is recorded in `docs/progressive-release.md` (adamsuk/software-factory#352).
 
 ## 2026-11-12 (block egress on the Deploy job)
 

@@ -67,7 +67,7 @@ Record the run below once it has happened.
 
 | Date | Run | Rollback step | Promote step |
 | --- | --- | --- | --- |
-| _pending_ | _run URL to be recorded by the maintainer_ | _pending_ | _pending_ |
+| 2026-11-12 | [43242601767](https://github.com/adamsuk/activity-feed/actions/runs/43242601767) (`workflow_dispatch`, `force_guardrail_failure` ticked) | Ran: redeployed the stable version `a5bdb0ca` at 100%, then failed the run on purpose ("Failing the run so the breach is visible") | Skipped |
 
 ## Unverified until the first real run
 
