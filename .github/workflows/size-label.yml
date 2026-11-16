@@ -20,7 +20,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    uses: adamsuk/gh-factory/.github/workflows/size-label.yml@09014a5d0c8641f246411a08f303c08cd7750e24
+    uses: adamsuk/gh-factory/.github/workflows/size-label.yml@35b16b67eb971200e5e4fc1db7a6dd9b2c8ae2a7
     with:
       xs_lines: 10
       s_lines: 50
